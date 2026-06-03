@@ -72,8 +72,8 @@ services:
   base:
     build:
       context: .
+      target: dev
       args:
-        DEVEL: "yes"
         IPYTHON: "no"
     image: warehouse:docker-compose
     environment:

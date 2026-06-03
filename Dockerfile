@@ -111,6 +111,63 @@ USER docs
 
 
 
+# This is a development-specific stage that installs all system and Python
+# dependencies but does NOT copy any application code or static files.
+# Development code is provided via docker-compose volume mounts, so modifying
+# warehouse/ Python files will never invalidate any layer in this stage.
+FROM base AS dev
+
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONPATH=/opt/warehouse/src/
+
+RUN --mount=type=cache,id=pkg,target=/root/.cache \
+        create-venv /opt/warehouse
+
+# Install System level Warehouse requirements, this is done before everything
+# else because these are rarely ever going to change.
+# Usages:
+#  - build-essential: make
+#  - postgresql-client: make initdb and friends
+#  - oathtool: make totp
+RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
+        apt-install \
+           build-essential \
+           postgresql-client \
+           oathtool \
+           fd-find \
+        && ln -s $(which fdfind) /usr/local/bin/fd
+
+# Install the Python level Warehouse requirements, this is done after copying
+# the requirements but prior to copying Warehouse itself into the container so
+# that code changes don't require triggering an entire install of all of
+# Warehouse's dependencies.
+RUN --mount=type=cache,id=pkg,target=/root/.cache \
+    --mount=type=bind,src=requirements/,dst=/opt/warehouse/src/requirements/ \
+    pip-install \
+        -r requirements/deploy.txt \
+        -r requirements/main.txt \
+        -r requirements/dev.txt \
+        -r requirements/tests.txt \
+        -r requirements/lint.txt
+
+# To enable Ipython in the development environment set to yes (for using ipython
+# as the warehouse shell interpreter,
+# i.e. 'docker compose run --rm web python -m warehouse shell --type=ipython')
+ARG IPYTHON=no
+
+# Install the IPython dependencies, which has to be done as it's own step because
+# we don't have pinned hashes for IPython.
+RUN --mount=type=cache,id=pkg,target=/root/.cache \
+    --mount=type=bind,src=requirements/,dst=/opt/warehouse/src/requirements/ \
+    if [ "$IPYTHON" = "yes" ]; then \
+      pip-install -r requirements/ipython.txt; \
+    fi
+
+# Pre-compile our dependencies bytecode to save time collectively on container boot!
+RUN python -m compileall /opt/warehouse/lib/ -j 0
+
+
 # Now we're going to build our actual application image
 FROM base
 
