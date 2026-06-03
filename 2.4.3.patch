@@ -1,0 +1,55 @@
+diff --git a/Dockerfile b/Dockerfile
+index ad686d37d..f2375c139 100644
+--- a/Dockerfile
++++ b/Dockerfile
+@@ -159,9 +159,25 @@ RUN --mount=type=cache,id=pkg,target=/root/.cache \
+     --mount=type=bind,src=requirements/,dst=/opt/warehouse/src/requirements/ \
+     pip-install \
+         -r requirements/deploy.txt \
+-        -r requirements/main.txt \
+-        $(if [ "$DEVEL" = "yes" ]; then echo '-r requirements/dev.txt -r requirements/tests.txt -r requirements/lint.txt'; fi) \
+-        $(if [ "$CI" = "yes" ]; then echo '-r requirements/docs-dev.txt -r requirements/docs-user.txt -r requirements/docs-blog.txt'; fi )
++        -r requirements/main.txt
++
++RUN --mount=type=cache,id=pkg,target=/root/.cache \
++    --mount=type=bind,src=requirements/,dst=/opt/warehouse/src/requirements/ \
++    if [ "$DEVEL" = "yes" ]; then \
++        pip-install \
++            -r requirements/dev.txt \
++            -r requirements/tests.txt \
++            -r requirements/lint.txt; \
++    fi
++
++RUN --mount=type=cache,id=pkg,target=/root/.cache \
++    --mount=type=bind,src=requirements/,dst=/opt/warehouse/src/requirements/ \
++    if [ "$CI" = "yes" ]; then \
++        pip-install \
++            -r requirements/docs-dev.txt \
++            -r requirements/docs-user.txt \
++            -r requirements/docs-blog.txt; \
++    fi
+ 
+ # To enable Ipython in the development environment set to yes (for using ipython
+ # as the warehouse shell interpreter,
+@@ -179,6 +195,12 @@ RUN --mount=type=cache,id=pkg,target=/root/.cache \
+ # Pre-compile our dependencies bytecode to save time collectively on container boot!
+ RUN python -m compileall /opt/warehouse/lib/ -j 0
+ 
++# Pre-cache TLD list
++# NOTE: We only do this when we're not building a dev build, because a dev build
++#       doesn't need to keep an updated tldextract database an can fall back to
++#       snapshot included in tldextract.
++RUN if [ "$DEVEL" != "yes" ]; then tldextract --update; fi
++
+ # Copy our compiled static files. These should overlay cleanly on top of the
+ # virtual environment and even when that gets invalidated, copything these is
+ # super fast.
+@@ -211,8 +233,3 @@ COPY --exclude=requirements \
+ #       *.pyc files won't be used in that case.
+ RUN if [ "$DEVEL" != "yes" ]; then python -m compileall warehouse/ -j 0; fi
+ 
+-# Pre-cache TLD list
+-# NOTE: We only do this when we're not building a dev build, because a dev build
+-#       doesn't need to keep an updated tldextract database an can fall back to
+-#       snapshot included in tldextract.
+-RUN if [ "$DEVEL" != "yes" ]; then tldextract --update; fi
