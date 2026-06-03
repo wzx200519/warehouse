@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-export COVERAGE_PROCESS_START="$(pwd)/pyproject.toml"
+export COVERAGE_PROCESS_START="$(pwd)/.coveragerc"
 # PEP 669 introduced sys.monitoring, a lighter-weight way to monitor
 # the execution. Tell coverage to use this
 # https://nedbatchelder.com/blog/202312/coveragepy_with_sysmonitoring.html
