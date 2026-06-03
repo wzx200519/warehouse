@@ -5,6 +5,10 @@ class DevelopmentModeWarning(UserWarning):
     pass
 
 
+class InsecureStorageWarning(DevelopmentModeWarning):
+    pass
+
+
 class InsecureOIDCPublisherWarning(DevelopmentModeWarning):
     pass
 

@@ -425,12 +425,13 @@ def get_db_session_for_app_config(app_config):
         Session.remove()
         trans.rollback()
         conn.close()
-        engine.dispose()
 
 
 @pytest.fixture(scope="session")
 def app_config(database):
-    return get_app_config(database)
+    cfg = get_app_config(database)
+    yield cfg
+    cfg.registry["sqlalchemy.engine"].dispose()
 
 
 @pytest.fixture(scope="session")
@@ -444,7 +445,9 @@ def app_config_dbsession_from_env(database):
         "sessions.url": "redis://redis:0/",
     }
 
-    return get_app_config(database, nondefaults)
+    cfg = get_app_config(database, nondefaults)
+    yield cfg
+    cfg.registry["sqlalchemy.engine"].dispose()
 
 
 @pytest.fixture
@@ -529,15 +532,24 @@ def organization_service(db_session):
 
 @pytest.fixture
 def billing_service(app_config):
+    original_api_base = stripe.api_base
+    original_api_version = stripe.api_version
+    original_api_key = stripe.api_key
+
     stripe.api_base = app_config.registry.settings["billing.api_base"]
     stripe.api_version = app_config.registry.settings["billing.api_version"]
     stripe.api_key = "sk_test_123"
-    return subscription_services.MockStripeBillingService(
+
+    yield subscription_services.MockStripeBillingService(
         api=stripe,
         publishable_key="pk_test_123",
         webhook_secret="whsec_123",
         domain="localhost",
     )
+
+    stripe.api_base = original_api_base
+    stripe.api_version = original_api_version
+    stripe.api_key = original_api_key
 
 
 @pytest.fixture
@@ -678,9 +690,10 @@ def _enable_all_oidc_providers(webtest):
 @pytest.fixture
 def _enable_organizations(db_request):
     flag = db_request.db.get(AdminFlag, AdminFlagValue.DISABLE_ORGANIZATIONS.value)
+    original_value = flag.enabled
     flag.enabled = False
     yield
-    flag.enabled = True
+    flag.enabled = original_value
 
 
 @pytest.fixture
@@ -753,8 +766,14 @@ def tm():
     tm.abort()
 
 
+@pytest.fixture(scope="session")
+def _wsgi_app(app_config_dbsession_from_env):
+    app_config_dbsession_from_env.add_settings(enforce_https=False)
+    return app_config_dbsession_from_env.make_wsgi_app()
+
+
 @pytest.fixture
-def webtest(app_config_dbsession_from_env, tm):
+def webtest(_wsgi_app, app_config_dbsession_from_env, tm):
     """
     This fixture yields a test app with an alternative Pyramid configuration,
     injecting the database session and transaction manager into the app.
@@ -764,18 +783,13 @@ def webtest(app_config_dbsession_from_env, tm):
     After the fixture has yielded the app, the transaction is rolled back and
     the database is left in its previous state.
     """
-
-    # We want to disable anything that relies on TLS here.
-    app_config_dbsession_from_env.add_settings(enforce_https=False)
-
-    app = app_config_dbsession_from_env.make_wsgi_app()
     engine = app_config_dbsession_from_env.registry["sqlalchemy.engine"]
 
     with get_db_session_for_app_config(app_config_dbsession_from_env) as _db_session:
         # Register the app with the external test environment, telling
         # request.db to use this db_session and use the Transaction manager.
         testapp = _TestApp(
-            app,
+            _wsgi_app,
             engine,
             extra_environ={
                 "warehouse.db_session": _db_session,

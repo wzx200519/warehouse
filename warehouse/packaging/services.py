@@ -53,7 +53,7 @@ from warehouse.packaging.models import (
 )
 from warehouse.packaging.typosnyper import typo_check_name
 from warehouse.rate_limiting import DummyRateLimiter, IRateLimiter
-from warehouse.utils.exceptions import DevelopmentModeWarning
+from warehouse.utils.exceptions import DevelopmentModeWarning, InsecureStorageWarning
 from warehouse.utils.project import PROJECT_NAME_RE
 
 logger = logging.getLogger(__name__)
@@ -73,10 +73,6 @@ STDLIB_PROHIBITED = {
         for version in stdlib_list.short_versions
     )
 }
-
-
-class InsecureStorageWarning(DevelopmentModeWarning):
-    pass
 
 
 class GenericLocalBlobStorage:
