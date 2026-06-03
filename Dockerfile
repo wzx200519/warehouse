@@ -193,6 +193,12 @@ COPY --from=static /opt/warehouse/src/warehouse/admin/static/dist/ /opt/warehous
 # NOTE: We copy bin/release on it's own so that we can still exclude the rest
 #       of the bin/ directory when we copy over everything else.
 COPY bin/release /opt/warehouse/src/bin/release
+# First copy the __init__.py files to create directory structure
+COPY warehouse/__init__.py /opt/warehouse/src/warehouse/
+# Then copy other less frequently changed files
+COPY warehouse/config.py /opt/warehouse/src/warehouse/
+COPY warehouse/wsgi.py /opt/warehouse/src/warehouse/
+# Finally copy the rest of the warehouse directory
 COPY --exclude=requirements \
      --exclude=bin \
      --exclude=docs \

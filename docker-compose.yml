@@ -109,6 +109,14 @@ services:
         condition: service_started
       stripe:
         condition: service_started
+    develop:
+      watch:
+        - action: sync
+          path: ./warehouse
+          target: /opt/warehouse/src/warehouse
+          ignore:
+            - "*.pyc"
+            - "__pycache__"
 
   tests:
     image: warehouse:docker-compose
@@ -160,6 +168,14 @@ services:
         condition: service_healthy
       redis:
         condition: service_started
+    develop:
+      watch:
+        - action: sync
+          path: ./warehouse
+          target: /opt/warehouse/src/warehouse
+          ignore:
+            - "*.pyc"
+            - "__pycache__"
 
   rstuf-api:
     image: ghcr.io/repository-service-tuf/repository-service-tuf-api:v0.12.0b1

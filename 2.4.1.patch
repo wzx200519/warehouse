@@ -1,0 +1,51 @@
+diff --git a/Dockerfile b/Dockerfile
+index ad686d37d..b40c0c40c 100644
+--- a/Dockerfile
++++ b/Dockerfile
+@@ -193,6 +193,12 @@ COPY --from=static /opt/warehouse/src/warehouse/admin/static/dist/ /opt/warehous
+ # NOTE: We copy bin/release on it's own so that we can still exclude the rest
+ #       of the bin/ directory when we copy over everything else.
+ COPY bin/release /opt/warehouse/src/bin/release
++# First copy the __init__.py files to create directory structure
++COPY warehouse/__init__.py /opt/warehouse/src/warehouse/
++# Then copy other less frequently changed files
++COPY warehouse/config.py /opt/warehouse/src/warehouse/
++COPY warehouse/wsgi.py /opt/warehouse/src/warehouse/
++# Finally copy the rest of the warehouse directory
+ COPY --exclude=requirements \
+      --exclude=bin \
+      --exclude=docs \
+diff --git a/docker-compose.yml b/docker-compose.yml
+index ea3d76f4d..84f9a7610 100644
+--- a/docker-compose.yml
++++ b/docker-compose.yml
+@@ -109,6 +109,14 @@ services:
+         condition: service_started
+       stripe:
+         condition: service_started
++    develop:
++      watch:
++        - action: sync
++          path: ./warehouse
++          target: /opt/warehouse/src/warehouse
++          ignore:
++            - "*.pyc"
++            - "__pycache__"
+ 
+   tests:
+     image: warehouse:docker-compose
+@@ -160,6 +168,14 @@ services:
+         condition: service_healthy
+       redis:
+         condition: service_started
++    develop:
++      watch:
++        - action: sync
++          path: ./warehouse
++          target: /opt/warehouse/src/warehouse
++          ignore:
++            - "*.pyc"
++            - "__pycache__"
+ 
+   rstuf-api:
+     image: ghcr.io/repository-service-tuf/repository-service-tuf-api:v0.12.0b1
