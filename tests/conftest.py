@@ -529,15 +529,23 @@ def organization_service(db_session):
 
 @pytest.fixture
 def billing_service(app_config):
+    original_api_base = stripe.api_base
+    original_api_version = stripe.api_version
+    original_api_key = stripe.api_key
     stripe.api_base = app_config.registry.settings["billing.api_base"]
     stripe.api_version = app_config.registry.settings["billing.api_version"]
     stripe.api_key = "sk_test_123"
-    return subscription_services.MockStripeBillingService(
-        api=stripe,
-        publishable_key="pk_test_123",
-        webhook_secret="whsec_123",
-        domain="localhost",
-    )
+    try:
+        yield subscription_services.MockStripeBillingService(
+            api=stripe,
+            publishable_key="pk_test_123",
+            webhook_secret="whsec_123",
+            domain="localhost",
+        )
+    finally:
+        stripe.api_base = original_api_base
+        stripe.api_version = original_api_version
+        stripe.api_key = original_api_key
 
 
 @pytest.fixture

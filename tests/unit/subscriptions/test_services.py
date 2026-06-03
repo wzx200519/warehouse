@@ -38,6 +38,19 @@ from ...common.db.subscriptions import (
 )
 
 
+@pytest.fixture(autouse=True)
+def reset_stripe_globals():
+    original_api_base = stripe.api_base
+    original_api_version = stripe.api_version
+    original_api_key = stripe.api_key
+    try:
+        yield
+    finally:
+        stripe.api_base = original_api_base
+        stripe.api_version = original_api_version
+        stripe.api_key = original_api_key
+
+
 class TestStripeBillingService:
     def test_verify_service(self):
         assert verifyClass(IBillingService, StripeBillingService)
