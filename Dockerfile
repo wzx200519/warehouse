@@ -112,7 +112,7 @@ USER docs
 
 
 # Now we're going to build our actual application image
-FROM base
+FROM base AS python-deps
 
 # Setup some basic environment variables that are ~never going to change.
 ENV PYTHONUNBUFFERED=1
@@ -143,7 +143,6 @@ RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
            postgresql-client \
            oathtool \
            fd-find \
-        # Debian renames the `fd` binary to `fdfind`, so we'll rename it back to `fd`.
         && ln -s $(which fdfind) /usr/local/bin/fd; \
     fi
 
@@ -178,6 +177,16 @@ RUN --mount=type=cache,id=pkg,target=/root/.cache \
 
 # Pre-compile our dependencies bytecode to save time collectively on container boot!
 RUN python -m compileall /opt/warehouse/lib/ -j 0
+
+
+
+
+FROM python-deps AS dev
+
+
+
+
+FROM python-deps
 
 # Copy our compiled static files. These should overlay cleanly on top of the
 # virtual environment and even when that gets invalidated, copything these is

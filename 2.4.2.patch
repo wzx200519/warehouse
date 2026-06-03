@@ -1,0 +1,236 @@
+diff --git a/Dockerfile b/Dockerfile
+index ad686d37d..90e35f1de 100644
+--- a/Dockerfile
++++ b/Dockerfile
+@@ -112,7 +112,7 @@ USER docs
+ 
+ 
+ # Now we're going to build our actual application image
+-FROM base
++FROM base AS python-deps
+ 
+ # Setup some basic environment variables that are ~never going to change.
+ ENV PYTHONUNBUFFERED=1
+@@ -143,7 +143,6 @@ RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
+            postgresql-client \
+            oathtool \
+            fd-find \
+-        # Debian renames the `fd` binary to `fdfind`, so we'll rename it back to `fd`.
+         && ln -s $(which fdfind) /usr/local/bin/fd; \
+     fi
+ 
+@@ -179,6 +178,16 @@ RUN --mount=type=cache,id=pkg,target=/root/.cache \
+ # Pre-compile our dependencies bytecode to save time collectively on container boot!
+ RUN python -m compileall /opt/warehouse/lib/ -j 0
+ 
++
++
++
++FROM python-deps AS dev
++
++
++
++
++FROM python-deps
++
+ # Copy our compiled static files. These should overlay cleanly on top of the
+ # virtual environment and even when that gets invalidated, copything these is
+ # super fast.
+diff --git a/Makefile b/Makefile
+index 143849f6b..b5b207824 100644
+--- a/Makefile
++++ b/Makefile
+@@ -38,7 +38,7 @@ default:
+ 	@echo
+ 	@exit 1
+ 
+-.state/docker-build-base: Dockerfile package.json package-lock.json requirements/main.txt requirements/deploy.txt requirements/lint.txt requirements/tests.txt requirements/dev.txt
++.state/docker-build-base: Dockerfile requirements/main.txt requirements/deploy.txt requirements/lint.txt requirements/tests.txt requirements/dev.txt
+ 	# Build our base container for this project.
+ 	docker compose build --build-arg IPYTHON=$(IPYTHON) --force-rm base
+ 
+@@ -98,172 +98,3 @@ reformat: .state/docker-build-base
+ lint: .state/docker-build-base .state/docker-build-static
+ 	docker compose run --rm base bin/lint
+ 	docker compose run --rm static bin/static_lint
+-
+-dev-docs: .state/docker-build-docs
+-	docker compose run --rm dev-docs bin/dev-docs
+-
+-user-docs: .state/docker-build-docs
+-	docker compose run --rm user-docs bin/user-docs
+-
+-blog: .state/docker-build-docs
+-	docker compose run --rm blog mkdocs build -f docs/mkdocs-blog.yml
+-
+-licenses: .state/docker-build-base
+-	docker compose run --rm base bin/licenses
+-
+-deps: .state/docker-build-base
+-	docker compose run --rm base bin/deps
+-
+-deps_upgrade_all: .state/docker-build-base
+-	docker compose run --rm base bin/deps-upgrade -a
+-
+-deps_upgrade_project: .state/docker-build-base
+-	docker compose run --rm base bin/deps-upgrade -p $(P)
+-
+-translations: .state/docker-build-base
+-	docker compose run --rm base bin/translations
+-
+-requirements/%.txt: requirements/%.in
+-	docker compose run --rm base pip-compile --generate-hashes --output-file=$@ $<
+-
+-resetdb: .state/docker-build-base
+-	docker compose pause web worker
+-	docker compose up -d db
+-	docker compose exec --user postgres db /docker-entrypoint-initdb.d/init-dbs.sh
+-	rm -f .state/db-populated .state/db-migrated
+-	$(MAKE) initdb
+-	docker compose unpause web worker
+-
+-.state/search-indexed: .state/db-populated
+-	$(MAKE) reindex
+-	mkdir -p .state && touch .state/search-indexed
+-
+-.state/db-populated: .state/db-migrated
+-	docker compose run --rm web python -m warehouse sponsors populate-db
+-	docker compose run --rm web python -m warehouse classifiers sync
+-	docker compose exec --user postgres db psql -U postgres warehouse -f /post-migrations.sql
+-	mkdir -p .state && touch .state/db-populated
+-
+-.state/db-migrated: .state/docker-build-base
+-	docker compose up -d db
+-	docker compose exec db /usr/local/bin/wait-for-db
+-	$(MAKE) runmigrations
+-	mkdir -p .state && touch .state/db-migrated
+-
+-initdb: .state/docker-build-base .state/db-populated
+-	$(MAKE) reindex
+-
+-inittuf: .state/db-migrated
+-	docker compose up -d rstuf-api
+-	docker compose up -d rstuf-worker
+-	docker compose run --rm web python -m warehouse tuf bootstrap dev/rstuf/bootstrap.json --api-server http://rstuf-api
+-
+-runmigrations: .state/docker-build-base
+-	docker compose run --rm web python -m warehouse db upgrade head
+-
+-checkdb: .state/docker-build-base
+-	docker compose run --rm web bin/db-check
+-
+-reindex: .state/docker-build-base
+-	docker compose run --rm web python -m warehouse search reindex
+-
+-shell: .state/docker-build-base
+-	docker compose run --rm web python -m warehouse shell
+-
+-totp: .state/docker-build-base
+-	@docker compose run --rm base bin/devtotp
+-
+-dbshell: .state/docker-build-base
+-	docker compose run --rm web psql -h db -d warehouse -U postgres
+-
+-clean:
+-	rm -rf dev/*.sql
+-	rm -rf docs/blog-site/ docs/dev-site/ docs/user-site/
+-	rm -rf warehouse/static/dist/ warehouse/admin/static/dist/
+-
+-purge: stop clean
+-	rm -rf .state .coverage* .cache .state/db-populated .state/db-migrated
+-	docker compose down -v --remove-orphans
+-	docker compose rm --force
+-
+-stop:
+-	docker compose stop
+-
+-# ============================================================================
+-# CodeQL static analysis (runs on host, not in Docker)
+-# ============================================================================
+-# First-time run:
+-#   make codeql                       # install packs, build DB, analyze everything
+-#
+-# Other useful targets:
+-#   make codeql-analyze-python        # analyze one language against existing DB
+-#   make codeql-db                    # (re)build just the database
+-#   make codeql-rebuild               # force DB rebuild (packs/CLI sentinels kept)
+-#   make codeql-test                  # run custom query unit tests
+-#   make codeql-clean                 # remove DB, results, and sentinels
+-#
+-# The DB is automatically rebuilt when any tracked source file under
+-# warehouse/ changes (detected at make-invocation time via `find`).
+-#
+-# Override CODEQL_LANGS to scope to a subset (requires codeql-clean first if
+-# the existing DB was built with a different set):
+-#   make codeql CODEQL_LANGS=python
+-#
+-# Artifacts land under dev/codeql/ (gitignored):
+-#   dev/codeql/db/        database cluster
+-#   dev/codeql/results/   <language>.sarif per analyzed language
+-
+-CODEQL_LANGS ?= python javascript
+-
+-_codeql_db        := dev/codeql/db
+-_codeql_results   := dev/codeql/results
+-
+-_codeql_pack_python      = .github/codeql/custom-queries/python
+-_codeql_custom_python    = .github/codeql/custom-queries/python/warehouse-suite.qls
+-_codeql_sources          := $(shell git ls-files 'warehouse/*.py' 'warehouse/*.js' ':!warehouse/migrations/*' 2>/dev/null)
+-
+-.state/codeql-cli:
+-	@command -v codeql >/dev/null 2>&1 || { \
+-		echo "error: 'codeql' not found on PATH."; \
+-		echo "       macOS:   brew install --cask codeql"; \
+-		echo "       other:   https://github.com/github/codeql-cli-binaries/releases"; \
+-		exit 1; \
+-	}
+-	@mkdir -p .state && touch .state/codeql-cli
+-
+-.state/codeql-packs: .state/codeql-cli
+-	codeql pack install $(_codeql_pack_python)
+-	@mkdir -p .state && touch .state/codeql-packs
+-
+-.state/codeql-db: .state/codeql-packs .github/codeql/codeql-config.yml $(_codeql_sources)
+-	rm -rf $(_codeql_db)
+-	@mkdir -p $(dir $(_codeql_db))
+-	codeql database create $(_codeql_db) --db-cluster --threads=0 \
+-		$(addprefix --language=,$(CODEQL_LANGS)) \
+-		--codescanning-config=.github/codeql/codeql-config.yml
+-	@mkdir -p .state && touch .state/codeql-db
+-
+-codeql-db: .state/codeql-db
+-
+-codeql-rebuild:
+-	rm -rf $(_codeql_db) .state/codeql-db
+-	$(MAKE) codeql-db
+-
+-codeql-analyze-%: .state/codeql-db
+-	@mkdir -p $(_codeql_results)
+-	codeql database analyze $(_codeql_db)/$* --threads=0 \
+-		--format=sarif-latest \
+-		--output=$(_codeql_results)/$*.sarif \
+-		$(_codeql_custom_$*)
+-
+-codeql-analyze: $(addprefix codeql-analyze-,$(CODEQL_LANGS))
+-
+-codeql: codeql-analyze
+-
+-codeql-test: .state/codeql-packs
+-	codeql test run $(_codeql_pack_python)/tests
+-
+-codeql-clean:
+-	rm -rf dev/codeql .state/codeql-db .state/codeql-packs .state/codeql-cli
+-
+-.PHONY: default build serve resetdb initdb shell dbshell tests dev-docs user-docs deps deps_upgrade_all deps_upgrade_project clean purge debug stop compile-pot runmigrations checkdb codeql codeql-db codeql-rebuild codeql-analyze codeql-test codeql-clean
+diff --git a/docker-compose.yml b/docker-compose.yml
+index ea3d76f4d..e74dff793 100644
+--- a/docker-compose.yml
++++ b/docker-compose.yml
+@@ -72,6 +72,7 @@ services:
+   base:
+     build:
+       context: .
++      target: dev
+       args:
+         DEVEL: "yes"
+         IPYTHON: "no"
