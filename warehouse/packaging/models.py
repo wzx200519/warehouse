@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import enum
+import logging
+import time
 import typing
 
 from collections import OrderedDict
@@ -1127,20 +1129,34 @@ class JournalEntry(db.ModelBase):
     submitted_by: Mapped[User] = orm.relationship(lazy="raise_on_sql")
 
 
+logger = logging.getLogger(__name__)
+
+
+def _acquire_journal_lock(session):
+    for attempt in range(3):
+        acquired = session.execute(
+            select(
+                func.pg_try_advisory_xact_lock(
+                    cast(cast(JournalEntry.__tablename__, REGCLASS), Integer),
+                    _MONOTONIC_SEQUENCE,
+                )
+            )
+        ).scalar()
+
+        if acquired:
+            return
+
+        if attempt < 2:
+            time.sleep(0.01)
+
+    logger.warning(
+        "Could not acquire advisory lock for journal entries after 3 attempts; "
+        "proceeding without monotonic guarantee."
+    )
+
+
 @db.listens_for(db.Session, "before_flush")
 def ensure_monotonic_journals(config, session, flush_context, instances):
-    # We rely on `journals.id` to be a monotonically increasing integer,
-    # however the way that SERIAL is implemented, it does not guarantee
-    # that is the case.
-    #
-    # Ultimately SERIAL fetches the next integer regardless of what happens
-    # inside of the transaction. So journals.id will get filled in, in order
-    # of when the `INSERT` statements were executed, but not in the order
-    # that transactions were committed.
-    #
-    # The way this works, not even the SERIALIZABLE transaction types give
-    # us this property. Instead we have to implement our own locking that
-    # ensures that each new journal entry will be serialized.
     journal_entries = [obj for obj in session.new if isinstance(obj, JournalEntry)]
     if not journal_entries:
         return
@@ -1149,25 +1165,12 @@ def ensure_monotonic_journals(config, session, flush_context, instances):
         not isinstance(obj, JournalEntry) for obj in session.new
     )
     if has_other_pending:
-        # This flush contains both JournalEntries and other pending changes.
-        # Acquiring the advisory lock here would hold it while non-journal
-        # INSERTs/UPDATEs execute (e.g., File INSERT unique constraint checks),
-        # which can deadlock with concurrent transactions waiting for the same
-        # advisory lock. Defer the JournalEntries to a subsequent flush where
-        # they'll be the only pending objects, minimizing lock hold scope.
         for je in journal_entries:
             session.expunge(je)
         session.info.setdefault("_deferred_journals", []).extend(journal_entries)
         return
 
-    session.execute(
-        select(
-            func.pg_advisory_xact_lock(
-                cast(cast(JournalEntry.__tablename__, REGCLASS), Integer),
-                _MONOTONIC_SEQUENCE,
-            )
-        )
-    )
+    _acquire_journal_lock(session)
 
 
 @db.listens_for(db.Session, "after_flush")

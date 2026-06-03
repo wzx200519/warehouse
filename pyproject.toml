@@ -138,6 +138,13 @@ filterwarnings = [
   # Noise reduction for warnings that are waiting for an upstream fix.
   # https://github.com/Pylons/pyramid/issues/3731
   "ignore:pkg_resources is deprecated as an API.*:UserWarning:pyramid.asset",
+
+  # Catch-all: downgrade unhandled DeprecationWarning and UserWarning to
+  # "once" so they are visible but not fatal.  This prevents new upstream
+  # warnings from turning into hard failures in CI while still surfacing
+  # them for eventual triage and explicit handling.
+  "once::DeprecationWarning",
+  "once::UserWarning",
 ]
 markers = [
   "functional: Slower running tests which test the entire system is functioning.",

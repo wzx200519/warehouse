@@ -334,6 +334,10 @@ def mock_manifest_cache_buster():
 
 
 def get_app_config(database, nondefaults=None):
+    worker_id = os.environ.get("PYTEST_XDIST_WORKER", "master")
+    archive_path = os.path.join("/tmp", f"warehouse-test-{worker_id}")
+    os.makedirs(archive_path, exist_ok=True)
+
     settings = {
         "warehouse.prevent_esi": True,
         "warehouse.token": "insecure token",
@@ -351,7 +355,7 @@ def get_app_config(database, nondefaults=None):
         "opensearch.url": "https://localhost/warehouse",
         "files.backend": "warehouse.packaging.services.LocalFileStorage",
         "archive_files.backend": "warehouse.packaging.services.LocalArchiveFileStorage",
-        "archive_files.path": "/tmp",
+        "archive_files.path": archive_path,
         "simple.backend": "warehouse.packaging.services.LocalSimpleStorage",
         "docs.backend": "warehouse.packaging.services.LocalDocsStorage",
         "sponsorlogos.backend": "warehouse.admin.services.LocalSponsorLogoStorage",
