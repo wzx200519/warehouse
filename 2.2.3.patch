@@ -1,0 +1,76 @@
+diff --git a/pyproject.toml b/pyproject.toml
+index a6b46907a..494e800a0 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -138,6 +138,12 @@ filterwarnings = [
+   # Noise reduction for warnings that are waiting for an upstream fix.
+   # https://github.com/Pylons/pyramid/issues/3731
+   "ignore:pkg_resources is deprecated as an API.*:UserWarning:pyramid.asset",
++
++  # Additional ignores for flaky resource warnings in xdist
++  "ignore:unclosed.*:ResourceWarning",
++  "ignore:distutils Version classes are deprecated.*:DeprecationWarning",
++  "ignore:Setting custom __name__ is deprecated.*:DeprecationWarning",
++  "ignore:invalid escape sequence.*:DeprecationWarning",
+ ]
+ markers = [
+   "functional: Slower running tests which test the entire system is functioning.",
+diff --git a/tests/conftest.py b/tests/conftest.py
+index d1924cb90..4f810259e 100644
+--- a/tests/conftest.py
++++ b/tests/conftest.py
+@@ -529,15 +529,24 @@ def organization_service(db_session):
+ 
+ @pytest.fixture
+ def billing_service(app_config):
++    original_api_base = stripe.api_base
++    original_api_version = stripe.api_version
++    original_api_key = stripe.api_key
++    
+     stripe.api_base = app_config.registry.settings["billing.api_base"]
+     stripe.api_version = app_config.registry.settings["billing.api_version"]
+     stripe.api_key = "sk_test_123"
+-    return subscription_services.MockStripeBillingService(
+-        api=stripe,
+-        publishable_key="pk_test_123",
+-        webhook_secret="whsec_123",
+-        domain="localhost",
+-    )
++    try:
++        yield subscription_services.MockStripeBillingService(
++            api=stripe,
++            publishable_key="pk_test_123",
++            webhook_secret="whsec_123",
++            domain="localhost",
++        )
++    finally:
++        stripe.api_base = original_api_base
++        stripe.api_version = original_api_version
++        stripe.api_key = original_api_key
+ 
+ 
+ @pytest.fixture
+diff --git a/tests/unit/subscriptions/test_services.py b/tests/unit/subscriptions/test_services.py
+index 837857be3..d06851a08 100644
+--- a/tests/unit/subscriptions/test_services.py
++++ b/tests/unit/subscriptions/test_services.py
+@@ -38,6 +38,19 @@ from ...common.db.subscriptions import (
+ )
+ 
+ 
++@pytest.fixture(autouse=True)
++def reset_stripe_globals():
++    original_api_base = stripe.api_base
++    original_api_version = stripe.api_version
++    original_api_key = stripe.api_key
++    try:
++        yield
++    finally:
++        stripe.api_base = original_api_base
++        stripe.api_version = original_api_version
++        stripe.api_key = original_api_key
++
++
+ class TestStripeBillingService:
+     def test_verify_service(self):
+         assert verifyClass(IBillingService, StripeBillingService)

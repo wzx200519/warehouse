@@ -138,6 +138,12 @@ filterwarnings = [
   # Noise reduction for warnings that are waiting for an upstream fix.
   # https://github.com/Pylons/pyramid/issues/3731
   "ignore:pkg_resources is deprecated as an API.*:UserWarning:pyramid.asset",
+
+  # Additional ignores for flaky resource warnings in xdist
+  "ignore:unclosed.*:ResourceWarning",
+  "ignore:distutils Version classes are deprecated.*:DeprecationWarning",
+  "ignore:Setting custom __name__ is deprecated.*:DeprecationWarning",
+  "ignore:invalid escape sequence.*:DeprecationWarning",
 ]
 markers = [
   "functional: Slower running tests which test the entire system is functioning.",
