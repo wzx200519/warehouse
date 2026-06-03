@@ -190,12 +190,91 @@ COPY --from=static /opt/warehouse/src/warehouse/admin/static/dist/ /opt/warehous
 # the cache. This is most important in development, but it also useful for
 # deploying new code changes.
 #
+# We copy warehouse subdirectories separately to minimize cache invalidation:
+# changes to one subdirectory won't invalidate the cache for others.
+#
 # NOTE: We copy bin/release on it's own so that we can still exclude the rest
 #       of the bin/ directory when we copy over everything else.
 COPY bin/release /opt/warehouse/src/bin/release
+
+# Copy warehouse subdirectories individually for better cache utilization
+COPY warehouse/accounts/ /opt/warehouse/src/warehouse/accounts/
+COPY warehouse/admin/ /opt/warehouse/src/warehouse/admin/
+COPY warehouse/api/ /opt/warehouse/src/warehouse/api/
+COPY warehouse/attestations/ /opt/warehouse/src/warehouse/attestations/
+COPY warehouse/authnz/ /opt/warehouse/src/warehouse/authnz/
+COPY warehouse/banners/ /opt/warehouse/src/warehouse/banners/
+COPY warehouse/billing/ /opt/warehouse/src/warehouse/billing/
+COPY warehouse/cache/ /opt/warehouse/src/warehouse/cache/
+COPY warehouse/captcha/ /opt/warehouse/src/warehouse/captcha/
+COPY warehouse/classifiers/ /opt/warehouse/src/warehouse/classifiers/
+COPY warehouse/cli/ /opt/warehouse/src/warehouse/cli/
+COPY warehouse/email/ /opt/warehouse/src/warehouse/email/
+COPY warehouse/events/ /opt/warehouse/src/warehouse/events/
+COPY warehouse/forklift/ /opt/warehouse/src/warehouse/forklift/
+COPY warehouse/helpdesk/ /opt/warehouse/src/warehouse/helpdesk/
+COPY warehouse/i18n/ /opt/warehouse/src/warehouse/i18n/
+COPY warehouse/integrations/ /opt/warehouse/src/warehouse/integrations/
+COPY warehouse/ip_addresses/ /opt/warehouse/src/warehouse/ip_addresses/
+COPY warehouse/legacy/ /opt/warehouse/src/warehouse/legacy/
+COPY warehouse/legal/ /opt/warehouse/src/warehouse/legal/
+COPY warehouse/locale/ /opt/warehouse/src/warehouse/locale/
+COPY warehouse/macaroons/ /opt/warehouse/src/warehouse/macaroons/
+COPY warehouse/manage/ /opt/warehouse/src/warehouse/manage/
+COPY warehouse/metrics/ /opt/warehouse/src/warehouse/metrics/
+COPY warehouse/migrations/ /opt/warehouse/src/warehouse/migrations/
+COPY warehouse/mock/ /opt/warehouse/src/warehouse/mock/
+COPY warehouse/observations/ /opt/warehouse/src/warehouse/observations/
+COPY warehouse/oidc/ /opt/warehouse/src/warehouse/oidc/
+COPY warehouse/organizations/ /opt/warehouse/src/warehouse/organizations/
+COPY warehouse/packaging/ /opt/warehouse/src/warehouse/packaging/
+COPY warehouse/rate_limiting/ /opt/warehouse/src/warehouse/rate_limiting/
+COPY warehouse/referrer_metrics/ /opt/warehouse/src/warehouse/referrer_metrics/
+COPY warehouse/rss/ /opt/warehouse/src/warehouse/rss/
+COPY warehouse/search/ /opt/warehouse/src/warehouse/search/
+COPY warehouse/sitemap/ /opt/warehouse/src/warehouse/sitemap/
+COPY warehouse/sponsors/ /opt/warehouse/src/warehouse/sponsors/
+COPY warehouse/static/ /opt/warehouse/src/warehouse/static/
+COPY warehouse/subscriptions/ /opt/warehouse/src/warehouse/subscriptions/
+COPY warehouse/templates/ /opt/warehouse/src/warehouse/templates/
+COPY warehouse/tuf/ /opt/warehouse/src/warehouse/tuf/
+COPY warehouse/utils/ /opt/warehouse/src/warehouse/utils/
+
+# Copy warehouse top-level Python files
+COPY warehouse/__init__.py /opt/warehouse/src/warehouse/__init__.py
+COPY warehouse/__main__.py /opt/warehouse/src/warehouse/__main__.py
+COPY warehouse/aws.py /opt/warehouse/src/warehouse/aws.py
+COPY warehouse/b2.py /opt/warehouse/src/warehouse/b2.py
+COPY warehouse/celery.py /opt/warehouse/src/warehouse/celery.py
+COPY warehouse/config.py /opt/warehouse/src/warehouse/config.py
+COPY warehouse/configure.py /opt/warehouse/src/warehouse/configure.py
+COPY warehouse/constants.py /opt/warehouse/src/warehouse/constants.py
+COPY warehouse/csp.py /opt/warehouse/src/warehouse/csp.py
+COPY warehouse/csrf.py /opt/warehouse/src/warehouse/csrf.py
+COPY warehouse/db.py /opt/warehouse/src/warehouse/db.py
+COPY warehouse/errors.py /opt/warehouse/src/warehouse/errors.py
+COPY warehouse/filters.py /opt/warehouse/src/warehouse/filters.py
+COPY warehouse/forms.py /opt/warehouse/src/warehouse/forms.py
+COPY warehouse/gcloud.py /opt/warehouse/src/warehouse/gcloud.py
+COPY warehouse/http.py /opt/warehouse/src/warehouse/http.py
+COPY warehouse/logging.py /opt/warehouse/src/warehouse/logging.py
+COPY warehouse/predicates.py /opt/warehouse/src/warehouse/predicates.py
+COPY warehouse/redirects.py /opt/warehouse/src/warehouse/redirects.py
+COPY warehouse/referrer_policy.py /opt/warehouse/src/warehouse/referrer_policy.py
+COPY warehouse/routes.py /opt/warehouse/src/warehouse/routes.py
+COPY warehouse/sanity.py /opt/warehouse/src/warehouse/sanity.py
+COPY warehouse/sentry.py /opt/warehouse/src/warehouse/sentry.py
+COPY warehouse/sessions.py /opt/warehouse/src/warehouse/sessions.py
+COPY warehouse/static.py /opt/warehouse/src/warehouse/static.py
+COPY warehouse/tasks.py /opt/warehouse/src/warehouse/tasks.py
+COPY warehouse/views.py /opt/warehouse/src/warehouse/views.py
+COPY warehouse/wsgi.py /opt/warehouse/src/warehouse/wsgi.py
+
+# Copy remaining top-level files
 COPY --exclude=requirements \
      --exclude=bin \
      --exclude=docs \
+     --exclude=warehouse \
      --exclude=babel.config.js \
      --exclude=eslint.config.mjs \
      --exclude=package-lock.json \
