@@ -1,0 +1,96 @@
+diff --git a/2.1.4.patch b/2.1.4.patch
+new file mode 100644
+index 000000000..e69de29bb
+diff --git a/bin/gen-module b/bin/gen-module
+new file mode 100644
+index 000000000..662d59a1f
+--- /dev/null
++++ b/bin/gen-module
+@@ -0,0 +1,86 @@
++#!/usr/bin/env bash
++set -euo pipefail
++
++MODULE_NAME="${1:?Usage: $0 <module_name>}"
++WAREHOUSE_DIR="warehouse/${MODULE_NAME}"
++TESTS_DIR="tests/unit/${MODULE_NAME}"
++
++if [ -d "${WAREHOUSE_DIR}" ]; then
++    echo "Error: ${WAREHOUSE_DIR} already exists" >&2
++    exit 1
++fi
++if [ -d "${TESTS_DIR}" ]; then
++    echo "Error: ${TESTS_DIR} already exists" >&2
++    exit 1
++fi
++
++mkdir -p "${WAREHOUSE_DIR}" "${TESTS_DIR}"
++
++cat > "${WAREHOUSE_DIR}/__init__.py" << EOF
++# SPDX-License-Identifier: Apache-2.0
++
++
++def includeme(config):
++    pass
++EOF
++
++cat > "${WAREHOUSE_DIR}/interfaces.py" << EOF
++# SPDX-License-Identifier: Apache-2.0
++
++from __future__ import annotations
++
++from typing import TYPE_CHECKING
++
++from zope.interface import Interface
++
++if TYPE_CHECKING:
++    pass
++EOF
++
++cat > "${WAREHOUSE_DIR}/models.py" << EOF
++# SPDX-License-Identifier: Apache-2.0
++
++from __future__ import annotations
++
++import typing
++
++from warehouse import db
++
++if typing.TYPE_CHECKING:
++    pass
++EOF
++
++cat > "${WAREHOUSE_DIR}/services.py" << EOF
++# SPDX-License-Identifier: Apache-2.0
++
++from __future__ import annotations
++
++import typing
++
++if typing.TYPE_CHECKING:
++    pass
++EOF
++
++cat > "${WAREHOUSE_DIR}/errors.py" << 'EOF'
++# SPDX-License-Identifier: Apache-2.0
++
++EOF
++
++cat > "${TESTS_DIR}/__init__.py" << 'EOF'
++# SPDX-License-Identifier: Apache-2.0
++
++EOF
++
++cat > "${TESTS_DIR}/test_init.py" << 'EOF'
++# SPDX-License-Identifier: Apache-2.0
++
++EOF
++
++echo "Module template created:"
++echo "  ${WAREHOUSE_DIR}/"
++echo "  ${TESTS_DIR}/"
++echo ""
++echo "Next steps:"
++echo "  ruff check ${WAREHOUSE_DIR}/ ${TESTS_DIR}/"
++echo "  python -m mypy -p warehouse"
++echo "  bin/tests tests/unit/${MODULE_NAME}/"
+\ No newline at end of file
