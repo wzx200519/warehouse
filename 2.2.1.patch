@@ -1,0 +1,67 @@
+diff --git a/pyproject.toml b/pyproject.toml
+index a6b46907a..e978f5310 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -120,7 +120,14 @@ addopts = [
+   "-p no:ddtrace",
+   "-p no:ddtrace.pytest_bdd",
+   "-p no:ddtrace.pytest_benchmark",
++  # Better error reporting for xdist
++  "-v",
++  "--tb=short",
+ ]
++# xdist configuration
++xdist = {
++  "grouping": "tests-dir"  # 按测试目录分组，减少依赖冲突
++}
+ cache_dir = ".cache/pytest"
+ filterwarnings = [
+   "error",
+@@ -138,6 +145,12 @@ filterwarnings = [
+   # Noise reduction for warnings that are waiting for an upstream fix.
+   # https://github.com/Pylons/pyramid/issues/3731
+   "ignore:pkg_resources is deprecated as an API.*:UserWarning:pyramid.asset",
++  
++  # Additional warnings that may cause flaky tests in parallel runs
++  "ignore:unclosed.*:ResourceWarning",
++  "ignore:distutils Version classes are deprecated.*:DeprecationWarning",
++  "ignore:Setting custom __name__ is deprecated.*:DeprecationWarning",
++  "ignore:invalid escape sequence.*:DeprecationWarning",
+ ]
+ markers = [
+   "functional: Slower running tests which test the entire system is functioning.",
+diff --git a/tests/conftest.py b/tests/conftest.py
+index d1924cb90..065671d68 100644
+--- a/tests/conftest.py
++++ b/tests/conftest.py
+@@ -529,15 +529,29 @@ def organization_service(db_session):
+ 
+ @pytest.fixture
+ def billing_service(app_config):
++    # 保存原始 stripe 配置
++    original_api_base = stripe.api_base
++    original_api_version = stripe.api_version
++    original_api_key = stripe.api_key
++    
++    # 设置测试配置
+     stripe.api_base = app_config.registry.settings["billing.api_base"]
+     stripe.api_version = app_config.registry.settings["billing.api_version"]
+     stripe.api_key = "sk_test_123"
+-    return subscription_services.MockStripeBillingService(
++    
++    service = subscription_services.MockStripeBillingService(
+         api=stripe,
+         publishable_key="pk_test_123",
+         webhook_secret="whsec_123",
+         domain="localhost",
+     )
++    
++    yield service
++    
++    # 恢复原始配置，避免影响其他测试
++    stripe.api_base = original_api_base
++    stripe.api_version = original_api_version
++    stripe.api_key = original_api_key
+ 
+ 
+ @pytest.fixture

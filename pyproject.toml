@@ -120,7 +120,14 @@ addopts = [
   "-p no:ddtrace",
   "-p no:ddtrace.pytest_bdd",
   "-p no:ddtrace.pytest_benchmark",
+  # Better error reporting for xdist
+  "-v",
+  "--tb=short",
 ]
+# xdist configuration
+xdist = {
+  "grouping": "tests-dir"  # 按测试目录分组，减少依赖冲突
+}
 cache_dir = ".cache/pytest"
 filterwarnings = [
   "error",
@@ -138,6 +145,12 @@ filterwarnings = [
   # Noise reduction for warnings that are waiting for an upstream fix.
   # https://github.com/Pylons/pyramid/issues/3731
   "ignore:pkg_resources is deprecated as an API.*:UserWarning:pyramid.asset",
+  
+  # Additional warnings that may cause flaky tests in parallel runs
+  "ignore:unclosed.*:ResourceWarning",
+  "ignore:distutils Version classes are deprecated.*:DeprecationWarning",
+  "ignore:Setting custom __name__ is deprecated.*:DeprecationWarning",
+  "ignore:invalid escape sequence.*:DeprecationWarning",
 ]
 markers = [
   "functional: Slower running tests which test the entire system is functioning.",
