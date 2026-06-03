@@ -1,82 +1,87 @@
-diff --git a/tests/unit/utils/test_example.py b/tests/unit/utils/test_example.py
-new file mode 100644
-index 000000000..4102d1ab6
---- /dev/null
-+++ b/tests/unit/utils/test_example.py
-@@ -0,0 +1,43 @@
-+# SPDX-License-Identifier: Apache-2.0
-+
-+import pytest
-+
-+from warehouse.utils.example import Example
-+
-+
-+class TestExample:
-+    def test_init(self):
-+        example = Example(name="Test", value=42)
-+        assert example.name == "Test"
-+        assert example.value == 42
-+
-+    def test_greet(self):
-+        example = Example(name="Alice", value=10)
-+        assert example.greet() == "Hello, Alice!"
-+
-+    def test_double_value(self):
-+        example = Example(name="Test", value=5)
-+        assert example.double_value() == 10
-+
-+    def test_from_dict(self):
-+        data = {"name": "Bob", "value": 20}
-+        example = Example.from_dict(data)
-+        assert example.name == "Bob"
-+        assert example.value == 20
-+
-+    def test_repr(self):
-+        example = Example(name="Test", value=42)
-+        assert repr(example) == "Example(name='Test', value=42)"
-+
-+    @pytest.mark.parametrize(
-+        "value, expected",
-+        [
-+            (0, 0),
-+            (1, 2),
-+            (-3, -6),
-+            (100, 200),
-+        ],
-+    )
-+    def test_double_value_parametrized(self, value, expected):
-+        example = Example(name="Test", value=value)
-+        assert example.double_value() == expected
-diff --git a/warehouse/utils/example.py b/warehouse/utils/example.py
-new file mode 100644
-index 000000000..45c8528ec
---- /dev/null
-+++ b/warehouse/utils/example.py
-@@ -0,0 +1,27 @@
-+# SPDX-License-Identifier: Apache-2.0
-+
-+from typing import Any, Self
-+
-+
-+class Example:
-+    """Example class demonstrating project coding style and best practices."""
-+
-+    def __init__(self, name: str, value: int) -> None:
-+        self.name = name
-+        self.value = value
-+
-+    def greet(self) -> str:
-+        """Return a greeting message from this example instance."""
-+        return f"Hello, {self.name}!"
-+
-+    def double_value(self) -> int:
-+        """Return double the value of this example instance."""
-+        return self.value * 2
-+
-+    @classmethod
-+    def from_dict(cls, data: dict[str, Any]) -> Self:
-+        """Create an Example instance from a dictionary."""
-+        return cls(name=data["name"], value=data["value"])
-+
-+    def __repr__(self) -> str:
-+        return f"Example(name={self.name!r}, value={self.value!r})"
+diff --git a/2.1.1.patch b/2.1.1.patch
+index c8fcb26c2..e69de29bb 100644
+--- a/2.1.1.patch
++++ b/2.1.1.patch
+@@ -1,82 +0,0 @@
+-diff --git a/tests/unit/utils/test_example.py b/tests/unit/utils/test_example.py
+-new file mode 100644
+-index 000000000..4102d1ab6
+---- /dev/null
+-+++ b/tests/unit/utils/test_example.py
+-@@ -0,0 +1,43 @@
+-+# SPDX-License-Identifier: Apache-2.0
+-+
+-+import pytest
+-+
+-+from warehouse.utils.example import Example
+-+
+-+
+-+class TestExample:
+-+    def test_init(self):
+-+        example = Example(name="Test", value=42)
+-+        assert example.name == "Test"
+-+        assert example.value == 42
+-+
+-+    def test_greet(self):
+-+        example = Example(name="Alice", value=10)
+-+        assert example.greet() == "Hello, Alice!"
+-+
+-+    def test_double_value(self):
+-+        example = Example(name="Test", value=5)
+-+        assert example.double_value() == 10
+-+
+-+    def test_from_dict(self):
+-+        data = {"name": "Bob", "value": 20}
+-+        example = Example.from_dict(data)
+-+        assert example.name == "Bob"
+-+        assert example.value == 20
+-+
+-+    def test_repr(self):
+-+        example = Example(name="Test", value=42)
+-+        assert repr(example) == "Example(name='Test', value=42)"
+-+
+-+    @pytest.mark.parametrize(
+-+        "value, expected",
+-+        [
+-+            (0, 0),
+-+            (1, 2),
+-+            (-3, -6),
+-+            (100, 200),
+-+        ],
+-+    )
+-+    def test_double_value_parametrized(self, value, expected):
+-+        example = Example(name="Test", value=value)
+-+        assert example.double_value() == expected
+-diff --git a/warehouse/utils/example.py b/warehouse/utils/example.py
+-new file mode 100644
+-index 000000000..45c8528ec
+---- /dev/null
+-+++ b/warehouse/utils/example.py
+-@@ -0,0 +1,27 @@
+-+# SPDX-License-Identifier: Apache-2.0
+-+
+-+from typing import Any, Self
+-+
+-+
+-+class Example:
+-+    """Example class demonstrating project coding style and best practices."""
+-+
+-+    def __init__(self, name: str, value: int) -> None:
+-+        self.name = name
+-+        self.value = value
+-+
+-+    def greet(self) -> str:
+-+        """Return a greeting message from this example instance."""
+-+        return f"Hello, {self.name}!"
+-+
+-+    def double_value(self) -> int:
+-+        """Return double the value of this example instance."""
+-+        return self.value * 2
+-+
+-+    @classmethod
+-+    def from_dict(cls, data: dict[str, Any]) -> Self:
+-+        """Create an Example instance from a dictionary."""
+-+        return cls(name=data["name"], value=data["value"])
+-+
+-+    def __repr__(self) -> str:
+-+        return f"Example(name={self.name!r}, value={self.value!r})"
