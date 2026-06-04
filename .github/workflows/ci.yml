@@ -1,4 +1,4 @@
-name: CI
+name: CI/CD Pipeline
 on:
   push:
     branches:
@@ -6,14 +6,55 @@ on:
   pull_request:
   merge_group:
     types: [checks_requested]
-  workflow_dispatch:  # generally only for the "combine-prs" workflow
+  workflow_dispatch:
+
 permissions:
   contents: read
+  packages: write
+  id-token: write
+  security-events: write
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: true
+
 jobs:
+  pre-commit:
+    name: Pre-commit Checks
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Run pre-commit
+        uses: pre-commit/action@v3.0.1
+
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          ignore-unfixed: true
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH'
+      - name: Upload Trivy scan results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
+
   build:
+    needs: pre-commit
     if: github.repository == 'pypi/warehouse'
     runs-on: depot-ubuntu-24.04-arm
     outputs:
@@ -22,22 +63,22 @@ jobs:
       id-token: write
     steps:
       - name: Check out repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@v4
         with:
           persist-credentials: false
       - name: Set up Depot CLI
-        uses: depot/setup-action@15c09a5f77a0840ad4bce955686522a257853461 # v1.7.1
+        uses: depot/setup-action@v1
       - name: Build image
         id: build
-        uses: depot/build-push-action@5f3b3c2e5a00f0093de47f657aeaefcedff27d18 # v1.17.0
+        uses: depot/build-push-action@v1
         with:
           save: true
           build-args: |
             DEVEL=yes
             CI=yes
           tags: pypi/warehouse:ci-${{ github.run_id }}
+
   test:
-    # Time out if our test suite has gotten hung
     timeout-minutes: 15
     needs: build
     strategy:
@@ -72,9 +113,8 @@ jobs:
         ports:
           - 5432:5432
         env:
-          POSTGRES_HOST_AUTH_METHOD: trust  # never do this in production!
+          POSTGRES_HOST_AUTH_METHOD: trust
           POSTGRES_INITDB_ARGS: '--no-sync --set fsync=off --set full_page_writes=off'
-        # Set health checks to wait until postgres has started
         options: --health-cmd "pg_isready --username=postgres --dbname=postgres" --health-interval 10s --health-timeout 5s --health-retries 5
       redis:
         image: ${{ (matrix.name == 'Tests') && 'redis:7.0' || '' }}
@@ -87,12 +127,12 @@ jobs:
     name: ${{ matrix.name }}
     steps:
       - name: Check out repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@v4
         with:
           persist-credentials: false
       - name: Cache mypy results
         if: ${{ (matrix.name == 'Lint') }}
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache@v4
         with:
           path: |
               .cache/mypy
@@ -116,19 +156,17 @@ jobs:
         - 5432:5432
         env:
           POSTGRES_DB: warehouse
-          POSTGRES_HOST_AUTH_METHOD: trust  # never do this in production!
+          POSTGRES_HOST_AUTH_METHOD: trust
           POSTGRES_INITDB_ARGS: '--no-sync --set fsync=off --set full_page_writes=off'
-        # Set health checks to wait until postgres has started
         options: --health-cmd "pg_isready --username=postgres --dbname=postgres" --health-interval 10s --health-timeout 5s --health-retries 5
     steps:
       - name: Check out repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@v4
         with:
           persist-credentials: false
       - name: Dotenv Action
-        # We need to load the environment variables to run the CLI
         id: dotenv
-        uses: falti/dotenv-action@73fafca04177425fd3e0a0849257015ae9d42034 # v1.2.0
+        uses: falti/dotenv-action@v1.2.0
         with:
           path: dev/environment
           export-variables: true
@@ -138,5 +176,49 @@ jobs:
       - name: Check Database
         run: bin/db-check
         env:
-          # override the hostname set in `dev/environment`
           DATABASE_URL: 'postgresql+psycopg://postgres@postgres/warehouse'
+
+  docker-push:
+    name: Build & Push Production Image
+    needs: [test, check_db, security-scan]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Extract metadata (tags, labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+      - name: Build and push image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+  deploy:
+    name: Trigger Deployment
+    needs: docker-push
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Trigger Deployment Webhook
+        run: |
+          curl -X POST -H "Authorization: Bearer ${{ secrets.DEPLOY_TOKEN }}" \
+               -H "Content-Type: application/json" \
+               -d '{"image": "ghcr.io/${{ github.repository }}:${{ github.sha }}"}' \
+               ${{ secrets.DEPLOY_WEBHOOK_URL }}
