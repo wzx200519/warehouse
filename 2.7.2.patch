@@ -1,0 +1,514 @@
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index b5c4d5adf..b4f6632c0 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -1,142 +1,245 @@
+ name: CI
++
+ on:
++  pull_request:
+   push:
+     branches:
+       - main
+-  pull_request:
+   merge_group:
+     types: [checks_requested]
+-  workflow_dispatch:  # generally only for the "combine-prs" workflow
++  workflow_dispatch:
++
+ permissions:
+   contents: read
++  packages: write
++  security-events: write
++
+ concurrency:
+   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+   cancel-in-progress: true
++
++env:
++  REGISTRY: ghcr.io
++  IMAGE_NAME: ${{ github.repository }}
++
+ jobs:
+-  build:
+-    if: github.repository == 'pypi/warehouse'
+-    runs-on: depot-ubuntu-24.04-arm
+-    outputs:
+-      buildId: ${{ steps.build.outputs.build-id}}
+-    permissions:
+-      id-token: write
++  pre-commit:
++    name: Pre-commit
++    runs-on: ubuntu-24.04
++    timeout-minutes: 45
+     steps:
+       - name: Check out repository
+-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
++        uses: actions/checkout@v4
+         with:
+           persist-credentials: false
+-      - name: Set up Depot CLI
+-        uses: depot/setup-action@15c09a5f77a0840ad4bce955686522a257853461 # v1.7.1
+-      - name: Build image
+-        id: build
+-        uses: depot/build-push-action@5f3b3c2e5a00f0093de47f657aeaefcedff27d18 # v1.17.0
+-        with:
+-          save: true
+-          build-args: |
+-            DEVEL=yes
+-            CI=yes
+-          tags: pypi/warehouse:ci-${{ github.run_id }}
+-  test:
+-    # Time out if our test suite has gotten hung
+-    timeout-minutes: 15
+-    needs: build
+-    strategy:
+-      matrix:
+-        include:
+-          - name: Tests
+-            command: bin/tests --postgresql-host postgres
+-            runs_on: depot-ubuntu-24.04-arm-4
+-          - name: Lint
+-            command: bin/lint
+-            runs_on: depot-ubuntu-24.04-arm-4
+-          - name: User Documentation
+-            command: bin/user-docs
+-          - name: Developer Documentation
+-            command: bin/dev-docs
+-          - name: Dependencies
+-            command: bin/deps
+-          - name: Licenses
+-            command: bin/licenses
+-          - name: Translations
+-            command: bin/translations
+-    runs-on: ${{ (matrix.runs_on != null) && matrix.runs_on || 'depot-ubuntu-24.04-arm' }}
+-    container:
+-      image: registry.depot.dev/rltf7cln5v:${{ needs.build.outputs.buildId }}
+-      env:
+-        BILLING_BACKEND: warehouse.subscriptions.services.MockStripeBillingService api_base=http://stripe:12111 api_version=2020-08-27
+-    permissions:
+-      id-token: write
+-    services:
+-      postgres:
+-        image: ${{ (matrix.name == 'Tests') && 'postgres:17.5' || '' }}
+-        ports:
+-          - 5432:5432
+-        env:
+-          POSTGRES_HOST_AUTH_METHOD: trust  # never do this in production!
+-          POSTGRES_INITDB_ARGS: '--no-sync --set fsync=off --set full_page_writes=off'
+-        # Set health checks to wait until postgres has started
+-        options: --health-cmd "pg_isready --username=postgres --dbname=postgres" --health-interval 10s --health-timeout 5s --health-retries 5
+-      redis:
+-        image: ${{ (matrix.name == 'Tests') && 'redis:7.0' || '' }}
+-        ports:
+-          - 6379:6379
+-      stripe:
+-        image: ${{ (matrix.name == 'Tests') && 'stripe/stripe-mock:v0.162.0' || '' }}
+-        ports:
+-          - 12111:12111
+-    name: ${{ matrix.name }}
++      - name: Set up Python
++        uses: actions/setup-python@v5
++        with:
++          python-version: '3.14'
++      - name: Install pre-commit
++        run: python -m pip install --upgrade pip pre-commit
++      - name: Run pre-commit hooks
++        run: pre-commit run --all-files --hook-stage pre-commit
++
++  quality:
++    name: Lint and unit tests
++    runs-on: ubuntu-24.04
++    timeout-minutes: 60
+     steps:
+       - name: Check out repository
+-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
++        uses: actions/checkout@v4
+         with:
+           persist-credentials: false
+-      - name: Cache mypy results
+-        if: ${{ (matrix.name == 'Lint') }}
+-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+-        with:
+-          path: |
+-              .cache/mypy
+-          key: ${{ runner.os }}-mypy-${{ env.pythonLocation }}-${{ hashFiles('requirements.txt', 'requirements/*.txt') }}
+-      - name: Run ${{ matrix.name }}
+-        run: ${{ matrix.command }}
++      - name: Run lint
++        run: make lint
++      - name: Run Python unit tests
++        run: docker compose run --rm --env COVERAGE=no tests bin/tests --postgresql-host db -m unit
++      - name: Run frontend tests
++        run: make static_tests
+ 
+-  check_db:
+-    name: Check Database Consistency
+-    needs: build
+-    runs-on: depot-ubuntu-24.04-arm
+-    continue-on-error: true
+-    container:
+-      image: registry.depot.dev/rltf7cln5v:${{ needs.build.outputs.buildId }}
+-    permissions:
+-      id-token: write
+-    services:
+-      postgres:
+-        image: postgres:17.5
+-        ports:
+-        - 5432:5432
+-        env:
+-          POSTGRES_DB: warehouse
+-          POSTGRES_HOST_AUTH_METHOD: trust  # never do this in production!
+-          POSTGRES_INITDB_ARGS: '--no-sync --set fsync=off --set full_page_writes=off'
+-        # Set health checks to wait until postgres has started
+-        options: --health-cmd "pg_isready --username=postgres --dbname=postgres" --health-interval 10s --health-timeout 5s --health-retries 5
++  security:
++    name: Security scan
++    runs-on: ubuntu-24.04
++    timeout-minutes: 30
+     steps:
+       - name: Check out repository
+-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
++        uses: actions/checkout@v4
+         with:
+           persist-credentials: false
+-      - name: Dotenv Action
+-        # We need to load the environment variables to run the CLI
+-        id: dotenv
+-        uses: falti/dotenv-action@73fafca04177425fd3e0a0849257015ae9d42034 # v1.2.0
+-        with:
+-          path: dev/environment
+-          export-variables: true
+-          keys-case: upper
+-      - name: Install jq
+-        run: apt-get update && apt-get install -y jq
+-      - name: Check Database
+-        run: bin/db-check
++      - name: Set up Python
++        uses: actions/setup-python@v5
++        with:
++          python-version: '3.14'
++      - name: Install zizmor
++        run: python -m pip install --upgrade pip zizmor
++      - name: Run zizmor
++        run: zizmor --format sarif . > zizmor.sarif
++      - name: Upload zizmor results
++        if: always()
++        uses: github/codeql-action/upload-sarif@v4
++        with:
++          sarif_file: zizmor.sarif
++          category: zizmor
++      - name: Run Trivy repository scan
++        uses: aquasecurity/trivy-action@0.28.0
++        with:
++          scan-type: fs
++          scan-ref: .
++          format: sarif
++          output: trivy-results.sarif
++          scanners: vuln,misconfig,secret
++          severity: HIGH,CRITICAL
++          ignore-unfixed: true
++          exit-code: '1'
++      - name: Upload Trivy results
++        if: always()
++        uses: github/codeql-action/upload-sarif@v4
++        with:
++          sarif_file: trivy-results.sarif
++          category: trivy-fs
++
++  docker-verify:
++    name: Docker build verification
++    needs:
++      - pre-commit
++      - quality
++      - security
++    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
++    runs-on: ubuntu-24.04
++    timeout-minutes: 60
++    steps:
++      - name: Check out repository
++        uses: actions/checkout@v4
++        with:
++          persist-credentials: false
++      - name: Set up Docker Buildx
++        uses: docker/setup-buildx-action@v3
++      - name: Build release image
++        uses: docker/build-push-action@v6
++        with:
++          context: .
++          file: ./Dockerfile
++          push: false
++          cache-from: type=gha,scope=warehouse-release
++          cache-to: type=gha,mode=max,scope=warehouse-release
++
++  publish-image:
++    name: Publish Docker image
++    needs:
++      - pre-commit
++      - quality
++      - security
++    if: |
++      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
++      github.event_name == 'workflow_dispatch'
++    runs-on: ubuntu-24.04
++    timeout-minutes: 60
++    outputs:
++      image_repository: ${{ steps.meta.outputs.image_repository }}
++      image_ref: ${{ steps.meta.outputs.image_ref }}
++      digest: ${{ steps.build.outputs.digest }}
++    steps:
++      - name: Check out repository
++        uses: actions/checkout@v4
++        with:
++          persist-credentials: false
++      - name: Set up Docker Buildx
++        uses: docker/setup-buildx-action@v3
++      - name: Log in to GHCR
++        uses: docker/login-action@v3
++        with:
++          registry: ${{ env.REGISTRY }}
++          username: ${{ github.actor }}
++          password: ${{ secrets.GITHUB_TOKEN }}
++      - name: Generate image metadata
++        id: meta
++        run: |
++          IMAGE_REPOSITORY="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
++          SHORT_SHA="${GITHUB_SHA::12}"
++          {
++            echo "image_repository=${IMAGE_REPOSITORY}"
++            echo "image_ref=${IMAGE_REPOSITORY}:sha-${SHORT_SHA}"
++            echo 'tags<<EOF'
++            echo "${IMAGE_REPOSITORY}:sha-${SHORT_SHA}"
++            if [ "${GITHUB_REF_NAME}" = "main" ]; then
++              echo "${IMAGE_REPOSITORY}:main"
++              echo "${IMAGE_REPOSITORY}:latest"
++            fi
++            echo 'EOF'
++          } >> "$GITHUB_OUTPUT"
++      - name: Build and push release image
++        id: build
++        uses: docker/build-push-action@v6
++        with:
++          context: .
++          file: ./Dockerfile
++          push: true
++          tags: ${{ steps.meta.outputs.tags }}
++          labels: |
++            org.opencontainers.image.revision=${{ github.sha }}
++            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
++          cache-from: type=gha,scope=warehouse-release
++          cache-to: type=gha,mode=max,scope=warehouse-release
++
++  scan-image:
++    name: Scan release image
++    needs:
++      - publish-image
++    if: needs.publish-image.result == 'success'
++    runs-on: ubuntu-24.04
++    timeout-minutes: 30
++    steps:
++      - name: Run Trivy image scan
++        uses: aquasecurity/trivy-action@0.28.0
++        with:
++          image-ref: ${{ needs.publish-image.outputs.image_repository }}@${{ needs.publish-image.outputs.digest }}
++          format: sarif
++          output: trivy-image-results.sarif
++          scanners: vuln
++          severity: HIGH,CRITICAL
++          ignore-unfixed: true
++          exit-code: '1'
++      - name: Upload Trivy image results
++        if: always()
++        uses: github/codeql-action/upload-sarif@v4
++        with:
++          sarif_file: trivy-image-results.sarif
++          category: trivy-image
++
++  deploy:
++    name: Trigger deployment
++    needs:
++      - publish-image
++      - scan-image
++    if: |
++      needs.publish-image.result == 'success' &&
++      needs.scan-image.result == 'success' &&
++      vars.DEPLOY_REPOSITORY != '' &&
++      secrets.DEPLOY_REPOSITORY_TOKEN != ''
++    runs-on: ubuntu-24.04
++    environment: ${{ vars.DEPLOY_ENVIRONMENT || 'production' }}
++    steps:
++      - name: Dispatch deploy event
++        uses: actions/github-script@v7
+         env:
+-          # override the hostname set in `dev/environment`
+-          DATABASE_URL: 'postgresql+psycopg://postgres@postgres/warehouse'
++          DEPLOY_REPOSITORY: ${{ vars.DEPLOY_REPOSITORY }}
++          DEPLOY_EVENT_TYPE: ${{ vars.DEPLOY_EVENT_TYPE || 'warehouse-deploy' }}
++          DEPLOY_ENVIRONMENT: ${{ vars.DEPLOY_ENVIRONMENT || 'production' }}
++          IMAGE_REF: ${{ needs.publish-image.outputs.image_ref }}
++          IMAGE_DIGEST: ${{ needs.publish-image.outputs.digest }}
++        with:
++          github-token: ${{ secrets.DEPLOY_REPOSITORY_TOKEN }}
++          script: |
++            const [owner, repo] = process.env.DEPLOY_REPOSITORY.split('/');
++            await github.rest.repos.createDispatchEvent({
++              owner,
++              repo,
++              event_type: process.env.DEPLOY_EVENT_TYPE,
++              client_payload: {
++                environment: process.env.DEPLOY_ENVIRONMENT,
++                image: process.env.IMAGE_REF,
++                digest: process.env.IMAGE_DIGEST,
++                source_repository: context.repo.owner + '/' + context.repo.repo,
++                source_sha: context.sha,
++              },
++            });
+diff --git a/.github/workflows/node-ci.yml b/.github/workflows/node-ci.yml
+index 3e1a2d08c..8e96152be 100644
+--- a/.github/workflows/node-ci.yml
++++ b/.github/workflows/node-ci.yml
+@@ -1,17 +1,11 @@
+-name: Node CI
++name: Node CI Manual
++
+ on:
+-  push:
+-    branches:
+-      - main
+-  pull_request:
+-  merge_group:
+-    types: [checks_requested]
+-  workflow_dispatch:  # generally only for the "combine-prs" workflow
++  workflow_dispatch:
++
+ permissions:
+   contents: read
+-concurrency:
+-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+-  cancel-in-progress: true
++
+ jobs:
+   test:
+     strategy:
+@@ -27,13 +21,14 @@ jobs:
+     name: ${{ matrix.name }}
+     steps:
+       - name: Check out repository
+-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
++        uses: actions/checkout@v4
+         with:
+-            persist-credentials: false
+-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
++          persist-credentials: false
++      - name: Set up Node
++        uses: actions/setup-node@v4
+         with:
+           node-version: 25.6.0
+-          cache: 'npm'
++          cache: npm
+       - name: Install Node dependencies
+         run: npm ci
+       - name: Run ${{ matrix.name }}
+diff --git a/.github/workflows/zizmor.yml b/.github/workflows/zizmor.yml
+index a03035855..3dc3fc4a8 100644
+--- a/.github/workflows/zizmor.yml
++++ b/.github/workflows/zizmor.yml
+@@ -1,37 +1,35 @@
+-# https://github.com/woodruffw/zizmor
+ name: GitHub Actions Security Analysis with Zizmor
+ 
+ on:
+-  push:
+-    branches: ["main"]
+-  pull_request:
+-    branches: ["*"]
++  schedule:
++    - cron: '0 3 * * 1'
++  workflow_dispatch:
++
++permissions:
++  contents: read
++  actions: read
++  security-events: write
+ 
+ jobs:
+   zizmor:
+-    # Advanced Security is not enabled on private repositories
+-    if: github.repository == 'pypi/warehouse'
+     name: Zizmor
+     runs-on: ubuntu-24.04
+-    permissions:
+-      security-events: write
+-      # required for workflows in private repositories
+-      contents: read
+-      actions: read
+     steps:
+       - name: Checkout repository
+-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
++        uses: actions/checkout@v4
+         with:
+           persist-credentials: false
+       - name: Setup Python
+-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
++        uses: actions/setup-python@v5
++        with:
++          python-version: '3.14'
+       - name: Run zizmor
+-        run: pipx run zizmor --format sarif . > results.sarif
++        run: |
++          python -m pip install --upgrade pip zizmor
++          zizmor --format sarif . > results.sarif
+       - name: Upload SARIF file
+-        uses: github/codeql-action/upload-sarif@7211b7c8077ea37d8641b6271f6a365a22a5fbfa # v4.36.0
++        if: always()
++        uses: github/codeql-action/upload-sarif@v4
+         with:
+-          # Path to SARIF file relative to the root of the repository
+           sarif_file: results.sarif
+-          # Optional category for the results
+-          # Used to differentiate multiple results for one commit
+           category: zizmor
+diff --git a/.pre-commit-config.yaml b/.pre-commit-config.yaml
+index 16ced0cde..588e3c11d 100644
+--- a/.pre-commit-config.yaml
++++ b/.pre-commit-config.yaml
+@@ -1,3 +1,4 @@
++default_stages: [pre-commit]
+ repos:
+   - repo: local
+     hooks:
+@@ -7,6 +8,7 @@ repos:
+         language: system
+         files: '\.py$|\.html$|babel\.cfg$'
+         pass_filenames: false
++        stages: [pre-commit, manual]
+ 
+       - id: reformat
+         name: reformat
+@@ -14,3 +16,26 @@ repos:
+         language: system
+         files: '\.py$|\.html$'
+         pass_filenames: false
++        stages: [pre-commit, manual]
++
++      - id: lint
++        name: lint
++        entry: make lint
++        language: system
++        files: '\.py$|\.html$|\.scss$|\.js$|\.toml$|README\.rst$|CONTRIBUTING\.rst$|docs/.*|dev/ast-grep/.*'
++        pass_filenames: false
++        stages: [pre-push, manual]
++
++      - id: unit-tests
++        name: unit-tests
++        entry: docker compose run --rm --env COVERAGE=no tests bin/tests --postgresql-host db -m unit
++        language: system
++        pass_filenames: false
++        stages: [pre-push, manual]
++
++      - id: static-tests
++        name: static-tests
++        entry: make static_tests
++        language: system
++        pass_filenames: false
++        stages: [pre-push, manual]

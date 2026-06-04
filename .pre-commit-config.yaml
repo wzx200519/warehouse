@@ -1,3 +1,4 @@
+default_stages: [pre-commit]
 repos:
   - repo: local
     hooks:
@@ -7,6 +8,7 @@ repos:
         language: system
         files: '\.py$|\.html$|babel\.cfg$'
         pass_filenames: false
+        stages: [pre-commit, manual]
 
       - id: reformat
         name: reformat
@@ -14,3 +16,26 @@ repos:
         language: system
         files: '\.py$|\.html$'
         pass_filenames: false
+        stages: [pre-commit, manual]
+
+      - id: lint
+        name: lint
+        entry: make lint
+        language: system
+        files: '\.py$|\.html$|\.scss$|\.js$|\.toml$|README\.rst$|CONTRIBUTING\.rst$|docs/.*|dev/ast-grep/.*'
+        pass_filenames: false
+        stages: [pre-push, manual]
+
+      - id: unit-tests
+        name: unit-tests
+        entry: docker compose run --rm --env COVERAGE=no tests bin/tests --postgresql-host db -m unit
+        language: system
+        pass_filenames: false
+        stages: [pre-push, manual]
+
+      - id: static-tests
+        name: static-tests
+        entry: make static_tests
+        language: system
+        pass_filenames: false
+        stages: [pre-push, manual]

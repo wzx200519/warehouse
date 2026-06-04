@@ -1,17 +1,11 @@
-name: Node CI
+name: Node CI Manual
+
 on:
-  push:
-    branches:
-      - main
-  pull_request:
-  merge_group:
-    types: [checks_requested]
-  workflow_dispatch:  # generally only for the "combine-prs" workflow
+  workflow_dispatch:
+
 permissions:
   contents: read
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
-  cancel-in-progress: true
+
 jobs:
   test:
     strategy:
@@ -27,13 +21,14 @@ jobs:
     name: ${{ matrix.name }}
     steps:
       - name: Check out repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@v4
         with:
-            persist-credentials: false
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+          persist-credentials: false
+      - name: Set up Node
+        uses: actions/setup-node@v4
         with:
           node-version: 25.6.0
-          cache: 'npm'
+          cache: npm
       - name: Install Node dependencies
         run: npm ci
       - name: Run ${{ matrix.name }}
