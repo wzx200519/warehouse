@@ -1,0 +1,107 @@
+name: Deployment Handler
+
+on:
+  repository_dispatch:
+    types:
+      - deploy-production
+      - deploy-staging
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy:
+    name: Deploy to ${{ github.event.action == 'deploy-production' && 'Production' || 'Staging' }}
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ github.event.action == 'deploy-production' && 'production' || 'staging' }}
+      url: ${{ github.event.action == 'deploy-production' && 'https://pypi.org' || 'https://staging.pypi.org' }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Configure AWS credentials
+        if: ${{ vars.USE_AWS == 'true' }}
+        uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e034352 # v4.0.2
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Setup kubectl
+        if: ${{ vars.USE_KUBERNETES == 'true' }}
+        uses: azure/setup-kubectl@v4
+
+      - name: Update Kubernetes manifests
+        if: ${{ vars.USE_KUBERNETES == 'true' }}
+        run: |
+          echo "Updating Kubernetes manifests with image: ${{ github.event.client_payload.image_tag }}"
+          # 这里应该更新 Kubernetes 部署文件中的镜像标签
+          # sed -i "s|IMAGE_TAG|${{ github.event.client_payload.image_tag }}|g" k8s/deployment.yaml
+
+      - name: Deploy to Kubernetes
+        if: ${{ vars.USE_KUBERNETES == 'true' }}
+        run: |
+          echo "Deploying to Kubernetes cluster..."
+          # kubectl apply -f k8s/
+
+      - name: Deploy to Docker Swarm
+        if: ${{ vars.USE_SWARM == 'true' }}
+        run: |
+          echo "Deploying to Docker Swarm..."
+          # docker stack deploy -c docker-compose.prod.yml warehouse
+
+      - name: Deploy to ECS
+        if: ${{ vars.USE_ECS == 'true' }}
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ecs-task-def.json
+          service: ${{ secrets.ECS_SERVICE_NAME }}
+          cluster: ${{ secrets.ECS_CLUSTER_NAME }}
+          wait-for-service-stability: true
+
+      - name: Verify Deployment
+        run: |
+          echo "Waiting for deployment to stabilize..."
+          # 这里可以添加健康检查脚本
+
+      - name: Notify Deployment Success
+        uses: 8398a7/action-slack@28ba43ae48961b90635b50953d216767a6bea486 # v3.16.2
+        if: success()
+        with:
+          status: custom
+          custom_payload: |
+            {
+              attachments: [{
+                color: 'good',
+                text: "✅ Deployment to ${{ github.event.action == 'deploy-production' && 'Production' || 'Staging' }} succeeded!",
+                fields: [
+                  { title: 'Repository', value: '${{ github.repository }}', short: true },
+                  { title: 'Commit', value: '${{ github.event.client_payload.sha }}', short: true },
+                  { title: 'Actor', value: '${{ github.event.client_payload.actor }}', short: true },
+                  { title: 'Image', value: '${{ github.event.client_payload.image_tag }}', short: true }
+                ]
+              }]
+            }
+          webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+
+      - name: Notify Deployment Failure
+        uses: 8398a7/action-slack@28ba43ae48961b90635b50953d216767a6bea486 # v3.16.2
+        if: failure()
+        with:
+          status: custom
+          custom_payload: |
+            {
+              attachments: [{
+                color: 'danger',
+                text: "❌ Deployment to ${{ github.event.action == 'deploy-production' && 'Production' || 'Staging' }} failed!",
+                fields: [
+                  { title: 'Repository', value: '${{ github.repository }}', short: true },
+                  { title: 'Commit', value: '${{ github.event.client_payload.sha }}', short: true },
+                  { title: 'Actor', value: '${{ github.event.client_payload.actor }}', short: true }
+                ]
+              }]
+            }
+          webhook_url: ${{ secrets.SLACK_WEBHOOK }}

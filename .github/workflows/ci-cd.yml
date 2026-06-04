@@ -1,0 +1,257 @@
+name: Complete CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+  pull_request:
+  merge_group:
+    types: [checks_requested]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+  id-token: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build Docker Image
+    if: github.repository == 'pypi/warehouse'
+    runs-on: depot-ubuntu-24.04-arm
+    outputs:
+      buildId: ${{ steps.build.outputs.build-id }}
+    permissions:
+      id-token: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Depot CLI
+        uses: depot/setup-action@15c09a5f77a0840ad4bce955686522a257853461 # v1.7.1
+
+      - name: Build image
+        id: build
+        uses: depot/build-push-action@5f3b3c2e5a00f0093de47f657aeaefcedff27d18 # v1.17.0
+        with:
+          save: true
+          build-args: |
+            DEVEL=yes
+            CI=yes
+          tags: pypi/warehouse:ci-${{ github.run_id }}
+
+  test:
+    name: ${{ matrix.name }}
+    needs: build
+    timeout-minutes: 20
+    runs-on: ${{ (matrix.runs_on != null) && matrix.runs_on || 'depot-ubuntu-24.04-arm' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Unit Tests
+            command: bin/tests --postgresql-host postgres
+            runs_on: depot-ubuntu-24.04-arm-4
+          - name: Lint Check
+            command: bin/lint
+            runs_on: depot-ubuntu-24.04-arm-4
+          - name: User Documentation
+            command: bin/user-docs
+          - name: Developer Documentation
+            command: bin/dev-docs
+          - name: Dependencies Check
+            command: bin/deps
+          - name: Licenses Check
+            command: bin/licenses
+          - name: Translations Check
+            command: bin/translations
+    container:
+      image: registry.depot.dev/rltf7cln5v:${{ needs.build.outputs.buildId }}
+      env:
+        BILLING_BACKEND: warehouse.subscriptions.services.MockStripeBillingService api_base=http://stripe:12111 api_version=2020-08-27
+    services:
+      postgres:
+        image: ${{ (matrix.name == 'Unit Tests') && 'postgres:17.5' || '' }}
+        ports:
+          - 5432:5432
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_INITDB_ARGS: '--no-sync --set fsync=off --set full_page_writes=off'
+        options: --health-cmd "pg_isready --username=postgres --dbname=postgres" --health-interval 10s --health-timeout 5s --health-retries 5
+      redis:
+        image: ${{ (matrix.name == 'Unit Tests') && 'redis:7.0' || '' }}
+        ports:
+          - 6379:6379
+      stripe:
+        image: ${{ (matrix.name == 'Unit Tests') && 'stripe/stripe-mock:v0.162.0' || '' }}
+        ports:
+          - 12111:12111
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Cache mypy results
+        if: ${{ matrix.name == 'Lint Check' }}
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: |
+            .cache/mypy
+          key: ${{ runner.os }}-mypy-${{ env.pythonLocation }}-${{ hashFiles('requirements.txt', 'requirements/*.txt') }}
+
+      - name: Run ${{ matrix.name }}
+        run: ${{ matrix.command }}
+
+  codeql:
+    name: CodeQL Security Analysis
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        language: ['javascript', 'python', 'actions']
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        if: matrix.language == 'python'
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt install libcurl4-openssl-dev libssl-dev
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@7211b7c8077ea37d8641b6271f6a365a22a5fbfa # v4.36.0
+        with:
+          languages: ${{ matrix.language }}
+          config-file: .github/codeql/codeql-config.yml
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@7211b7c8077ea37d8641b6271f6a365a22a5fbfa # v4.36.0
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@7211b7c8077ea37d8641b6271f6a365a22a5fbfa # v4.36.0
+        with:
+          category: "/language:${{matrix.language}}"
+
+  check-db:
+    name: Check Database Consistency
+    needs: build
+    runs-on: depot-ubuntu-24.04-arm
+    continue-on-error: true
+    container:
+      image: registry.depot.dev/rltf7cln5v:${{ needs.build.outputs.buildId }}
+    services:
+      postgres:
+        image: postgres:17.5
+        ports:
+          - 5432:5432
+        env:
+          POSTGRES_DB: warehouse
+          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_INITDB_ARGS: '--no-sync --set fsync=off --set full_page_writes=off'
+        options: --health-cmd "pg_isready --username=postgres --dbname=postgres" --health-interval 10s --health-timeout 5s --health-retries 5
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Dotenv Action
+        id: dotenv
+        uses: falti/dotenv-action@73fafca04177425fd3e0a0849257015ae9d42034 # v1.2.0
+        with:
+          path: dev/environment
+          export-variables: true
+          keys-case: upper
+
+      - name: Install jq
+        run: apt-get update && apt-get install -y jq
+
+      - name: Check Database
+        run: bin/db-check
+        env:
+          DATABASE_URL: 'postgresql+psycopg://postgres@postgres/warehouse'
+
+  push-image:
+    name: Push Production Docker Image
+    needs: [test, codeql, check-db]
+    runs-on: depot-ubuntu-24.04-arm
+    permissions:
+      id-token: write
+      contents: read
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Depot CLI
+        uses: depot/setup-action@15c09a5f77a0840ad4bce955686522a257853461 # v1.7.1
+
+      - name: Login to Container Registry
+        uses: docker/login-action@0d4c9c5ea7693da7b068278f7b52bda2a190a446 # v3.6.0
+        with:
+          registry: ${{ secrets.REGISTRY_URL }}
+          username: ${{ secrets.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+
+      - name: Build and Push Production Image
+        id: push
+        uses: depot/build-push-action@5f3b3c2e5a00f0093de47f657aeaefcedff27d18 # v1.17.0
+        with:
+          push: true
+          build-args: |
+            DEVEL=no
+            CI=no
+          tags: |
+            ${{ secrets.REGISTRY_URL }}/pypi/warehouse:${{ github.sha }}
+            ${{ secrets.REGISTRY_URL }}/pypi/warehouse:latest
+            ${{ secrets.REGISTRY_URL }}/pypi/warehouse:${{ github.ref_name }}
+
+  deploy:
+    name: Trigger Deployment
+    needs: push-image
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    steps:
+      - name: Trigger Deployment Webhook
+        uses: peter-evans/repository-dispatch@ff45666b9427631e3450c54a1bcbee4d9c4ff30c # v3.0.0
+        with:
+          token: ${{ secrets.DEPLOY_TOKEN }}
+          repository: ${{ secrets.DEPLOY_REPO }}
+          event-type: deploy-production
+          client-payload: |
+            {
+              "sha": "${{ github.sha }}",
+              "ref": "${{ github.ref }}",
+              "image_tag": "${{ secrets.REGISTRY_URL }}/pypi/warehouse:${{ github.sha }}",
+              "repository": "${{ github.repository }}",
+              "actor": "${{ github.actor }}"
+            }
+
+      - name: Send Notification
+        uses: 8398a7/action-slack@28ba43ae48961b90635b50953d216767a6bea486 # v3.16.2
+        if: always()
+        with:
+          status: ${{ job.status }}
+          fields: repo,message,commit,author,action,eventName,ref,workflow
+          webhook_url: ${{ secrets.SLACK_WEBHOOK }}
