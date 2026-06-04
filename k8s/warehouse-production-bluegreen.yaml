@@ -1,0 +1,100 @@
+# Blue-Green Deployment Configuration
+# 用于生产环境的蓝绿部署
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: warehouse-blue
+  namespace: warehouse-production
+  labels:
+    app: warehouse
+    slot: blue
+spec:
+  replicas: 5
+  selector:
+    matchLabels:
+      app: warehouse
+      slot: blue
+  template:
+    metadata:
+      labels:
+        app: warehouse
+        slot: blue
+      annotations:
+        sbom.spdx.io/reference: warehouse-blue-sbom.json
+    spec:
+      serviceAccountName: warehouse
+      containers:
+        - name: warehouse
+          image: ghcr.io/pypi/warehouse:blue  # CI 会推送带 blue 标签的镜像
+          ports:
+            - containerPort: 8000
+          env:
+            - name: ENVIRONMENT
+              value: "production"
+            - name: SLOT
+              value: "blue"
+          resources:
+            requests:
+              memory: "1Gi"
+              cpu: "500m"
+            limits:
+              memory: "4Gi"
+              cpu: "2000m"
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: warehouse-green
+  namespace: warehouse-production
+  labels:
+    app: warehouse
+    slot: green
+spec:
+  replicas: 5
+  selector:
+    matchLabels:
+      app: warehouse
+      slot: green
+  template:
+    metadata:
+      labels:
+        app: warehouse
+        slot: green
+      annotations:
+        sbom.spdx.io/reference: warehouse-green-sbom.json
+    spec:
+      serviceAccountName: warehouse
+      containers:
+        - name: warehouse
+          image: ghcr.io/pypi/warehouse:green  # CI 会推送带 green 标签的镜像
+          ports:
+            - containerPort: 8000
+          env:
+            - name: ENVIRONMENT
+              value: "production"
+            - name: SLOT
+              value: "green"
+          resources:
+            requests:
+              memory: "1Gi"
+              cpu: "500m"
+            limits:
+              memory: "4Gi"
+              cpu: "2000m"
+
+---
+# Service 通过 selector.active 标签切换流量
+apiVersion: v1
+kind: Service
+metadata:
+  name: warehouse-production
+  namespace: warehouse-production
+spec:
+  selector:
+    app: warehouse
+    active: blue  # 切换为 green 以启用蓝绿部署
+  ports:
+    - port: 443
+      targetPort: 8000

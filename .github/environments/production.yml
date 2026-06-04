@@ -1,0 +1,14 @@
+# Production 环境配置
+# 需要在 GitHub 仓库 Settings > Environments 中手动创建
+# 并设置所需的审批者和保护规则
+
+name: Production
+protection_rules:
+  - name: "Require approval"
+    required_reviewers:
+      - "@pypa/infra"  # 根据实际团队调整
+    wait_timer: 0  # 可设置为 4320 (3天) 增加安全性
+  - name: "Require successful deployment to staging"
+    required_status_checks:
+      - "Build & Push Docker Image"
+      - "Deploy to Staging"

@@ -1,0 +1,540 @@
+name: CI/CD Pipeline
+on:
+  push:
+    branches:
+      - main      # 主分支推送触发完整流水线
+      - 'releases/**'  # release 分支触发生产部署
+  pull_request:
+    branches:
+      - main
+  merge_group:
+    types: [checks_requested]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: '部署环境'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+          - staging
+          - production
+      skip_tests:
+        description: '跳过测试阶段'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+  security-events: write
+  deployments: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event.pull_request != null }}
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+  PYTHON_VERSION: '3.14'
+  NODE_VERSION: '25.6.0'
+
+jobs:
+  # ==================== 阶段1: 代码质量检查 ====================
+  lint-and-format:
+    name: Lint & Format Check
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements/lint.txt -r requirements/main.txt
+          npm ci
+
+      - name: Run pre-commit hooks
+        uses: pre-commit/action@v3.0.1
+        with:
+          extra_args: --all-files --show-diff-on-failure
+
+      - name: Run Python Lint
+        run: |
+          make lint
+        env:
+          DOCKER_BUILDKIT: '1'
+
+      - name: Run Frontend Lint
+        run: |
+          make static_lint
+        env:
+          DOCKER_BUILDKIT: '1'
+
+      - name: Upload lint results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lint-results
+          path: |
+            .cache/lint-reports/
+          retention-days: 7
+
+  # ==================== 阶段2: 安全扫描 ====================
+  security-scan:
+    name: Security Scanning
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        include:
+          - scanner: bandit
+            tool: python
+          - scanner: safety
+            tool: python
+          - scanner: npm-audit
+            tool: node
+          - scanner: trivy
+            tool: docker
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        if: matrix.tool == 'python'
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Set up Node.js
+        if: matrix.tool == 'node'
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Run Bandit Security Scan
+        if: matrix.scanner == 'bandit'
+        run: |
+          pip install bandit bandit-sarif-json
+          bandit -r warehouse -f sarif -o bandit-results.sarif || true
+
+      - name: Run Safety Check
+        if: matrix.scanner == 'safety'
+        run: |
+          pip install safety
+          safety check --json --output safety-results.json || true
+
+      - name: Run npm audit
+        if: matrix.scanner == 'npm-audit'
+        run: |
+          npm ci
+          npm audit --json > npm-audit-results.json || true
+
+      - name: Run Trivy Vulnerability Scanner
+        if: matrix.scanner == 'trivy'
+        run: |
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+            aquasec/trivy:latest image \
+            --security-checks vuln \
+            --severity HIGH,CRITICAL \
+            --format sarif \
+            --output trivy-results.sarif \
+            python:${{ env.PYTHON_VERSION }}-slim
+
+      - name: Upload Security Scan Results
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-scan-${{ matrix.scanner }}
+          path: |
+            *-results.sarif
+            *-results.json
+          retention-days: 7
+          if-no-files-found: ignore
+
+  # ==================== 阶段3: 单元测试 ====================
+  unit-tests:
+    name: Unit Tests
+    runs-on: depot-ubuntu-24.04-arm
+    timeout-minutes: 20
+    outputs:
+      coverage-artifact: ${{ steps.test.outputs.coverage-artifact }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Depot CLI
+        uses: depot/setup-action@15c09a5f77a0840ad4bce955686522a257853461 # v1.7.1
+
+      - name: Build image
+        id: build
+        uses: depot/build-push-action@5f3b3c2e5a00f0093de47f657aeaefcedff27d18 # v1.17.0
+        with:
+          save: true
+          build-args: |
+            DEVEL=yes
+            CI=yes
+          tags: warehouse:test-${{ github.run_id }}
+
+      - name: Run tests in container
+        id: test
+        uses: depot/build-push-action@5f3b3c2e5a00f0093de47f657aeaefcedff27d18 # v1.17.0
+        with:
+          target: worker
+          push: false
+          load: true
+          build-args: |
+            DEVEL=yes
+            CI=yes
+          tags: warehouse:worker-test-${{ github.run_id }}
+
+      - name: Start services
+        run: |
+          docker compose up -d postgres redis stripe
+
+      - name: Run unit tests
+        run: |
+          docker run --rm --network container:postgres \
+            -e BILLING_BACKEND=warehouse.subscriptions.services.MockStripeBillingService \
+            -e DATABASE_URL=postgresql://postgres@postgres/warehouse \
+            warehouse:worker-test-${{ github.run_id }} \
+            bin/tests --postgresql-host postgres
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: |
+            htmlcov/
+            .coverage
+            test-results/
+          retention-days: 14
+
+  # ==================== 阶段4: Docker 镜像构建与推送 ====================
+  build-and-push:
+    name: Build & Push Docker Image
+    runs-on: depot-ubuntu-24.04-arm
+    needs: [lint-and-format, unit-tests]
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/releases/'))
+    outputs:
+      image-tag: ${{ steps.meta.outputs.tags }}
+      image-digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Depot CLI
+        uses: depot/setup-action@15c09a5f77a0840ad4bce955686522a257853461 # v1.7.1
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=sha,prefix={{branch}}-
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+
+      - name: Build and push with Depot
+        id: build
+        uses: depot/build-push-action@5f3b3c2e5a00f0093de47f657aeaefcedff27d18 # v1.17.0
+        with:
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            CI=yes
+            GIT_SHA=${{ github.sha }}
+            GIT_REF=${{ github.ref }}
+          cache-from: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          cache-to: type=gha,mode=max
+
+      - name: Generate SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          format: spdx-json
+          output-file: sbom.spdx.json
+
+      - name: Upload SBOM
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: sbom.spdx.json
+          retention-days: 90
+
+  # ==================== 阶段5: 部署到 Staging ====================
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-24.04
+    needs: build-and-push
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    environment:
+      name: staging
+      url: https://staging.pypi.org
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Download SBOM
+        uses: actions/download-artifact@v4
+        with:
+          name: sbom
+          path: .
+
+      - name: Deploy to Staging
+        run: |
+          echo "部署到 Staging 环境..."
+          echo "镜像: ${{ needs.build-and-push.outputs.image-tag }}"
+          
+          # 示例: 调用部署脚本或 API
+          ./scripts/deploy.sh \
+            --environment staging \
+            --image ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
+            --sbom ./sbom.spdx.json
+
+      - name: Wait for deployment
+        run: |
+          echo "等待服务启动..."
+          sleep 30
+          
+      - name: Health check
+        run: |
+          echo "执行健康检查..."
+          curl -f https://staging.pypi.org/health || exit 1
+
+      - name: Smoke tests
+        run: |
+          echo "执行冒烟测试..."
+          ./scripts/smoke-tests.sh --environment staging
+
+      - name: Notify deployment status
+        if: always()
+        uses: slackapi/slack-github-action@v1.26.0
+        with:
+          payload: |
+            {
+              "text": "Staging 部署状态: ${{ job.status }}",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*Staging 部署* ${{ job.status == 'success' && '✅ 成功' || '❌ 失败' }}"
+                  }
+                },
+                {
+                  "type": "context",
+                  "elements": [
+                    {
+                      "type": "mrkdwn",
+                      "text": "Commit: <${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}|${{ github.sha }}> | Author: ${{ github.actor }}"
+                    }
+                  ]
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
+
+  # ==================== 阶段6: 部署到 Production ====================
+  deploy-production:
+    name: Deploy to Production
+    runs-on: ubuntu-24.04
+    needs: build-and-push
+    if: startsWith(github.ref, 'refs/heads/releases/') || github.event.inputs.environment == 'production'
+    environment:
+      name: production
+      url: https://pypi.org
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Download SBOM
+        uses: actions/download-artifact@v4
+        with:
+          name: sbom
+          path: .
+
+      - name: Require approval for production
+        uses: trstringer/manual-approval@v1
+        with:
+          secret: ${{ secrets.GH_APPROVAL_TOKEN }}
+          approvers: ${{ secrets.REQUIRED_APPROVERS }}
+
+      - name: Deploy to Production
+        run: |
+          echo "部署到 Production 环境..."
+          echo "镜像: ${{ needs.build-and-push.outputs.image-tag }}"
+          
+          ./scripts/deploy.sh \
+            --environment production \
+            --image ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
+            --sbom ./sbom.spdx.json \
+            --backup
+
+      - name: Blue-Green switch
+        run: |
+          echo "执行蓝绿部署切换..."
+          ./scripts/deploy-switch.sh --target production
+
+      - name: Smoke tests
+        run: |
+          echo "执行生产环境冒烟测试..."
+          ./scripts/smoke-tests.sh --environment production --strict
+
+      - name: Notify deployment status
+        if: always()
+        uses: slackapi/slack-github-action@v1.26.0
+        with:
+          payload: |
+            {
+              "text": "Production 部署状态: ${{ job.status }}",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*Production 部署* ${{ job.status == 'success' && '✅ 成功' || '❌ 失败' }}"
+                  }
+                },
+                {
+                  "type": "context",
+                  "elements": [
+                    {
+                      "type": "mrkdwn",
+                      "text": "Commit: <${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}|${{ github.sha }}> | Author: ${{ github.actor }}"
+                    }
+                  ]
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
+
+  # ==================== 阶段7: 回滚机制 ====================
+  rollback:
+    name: Rollback
+    runs-on: ubuntu-24.04
+    if: failure() && github.ref == 'refs/heads/main'
+    environment:
+      name: staging
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Trigger rollback
+        run: |
+          echo "检测到部署失败，自动回滚..."
+          
+          # 获取上一个稳定版本
+          LAST_STABLE_TAG=$(git describe --tags --abbrev=0 HEAD^)
+          
+          ./scripts/deploy.sh \
+            --environment staging \
+            --image ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:$LAST_STABLE_TAG \
+            --rollback
+
+      - name: Notify rollback
+        uses: slackapi/slack-github-action@v1.26.0
+        with:
+          payload: |
+            {
+              "text": "⚠️ 自动回滚已触发",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*自动回滚到上一稳定版本*\n从 ${{ github.sha }} 回滚"
+                  }
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
+
+  # ==================== 阶段8: 生成部署报告 ====================
+  deployment-report:
+    name: Generate Deployment Report
+    runs-on: ubuntu-24.04
+    needs: [deploy-staging, deploy-production]
+    if: always()
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Generate report
+        run: |
+          cat > deployment-report.md << 'EOF'
+          # 部署报告
+          
+          ## 部署信息
+          - **时间**: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+          - **分支**: ${{ github.ref }}
+          - **Commit**: ${{ github.sha }}
+          - **作者**: ${{ github.actor }}
+          
+          ## 部署状态
+          - Staging: ${{ needs.deploy-staging.result }}
+          - Production: ${{ needs.deploy-production.result }}
+          
+          ## 环境信息
+          - Python: ${{ env.PYTHON_VERSION }}
+          - Node.js: ${{ env.NODE_VERSION }}
+          EOF
+
+      - name: Upload report
+        uses: actions/upload-artifact@v4
+        with:
+          name: deployment-report
+          path: deployment-report.md
+          retention-days: 30

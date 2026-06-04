@@ -1,0 +1,22 @@
+# GitHub Environments Configuration
+# 确保在 GitHub 仓库设置中创建对应的 Environment
+
+# Staging 环境配置
+# 路径: .github/environments/staging.yml
+name: Staging
+# 阻止不通过 CI 的代码部署
+protection_rules:
+  - name: "Require successful CI"
+    required_status_checks:
+      - type: "current_user"
+        # 只有通过 CI 才能部署
+    wait_timer: 0
+
+# Production 环境配置  
+# 路径: .github/environments/production.yml
+# name: Production
+# protection_rules:
+#   - name: "Require approval"
+#     required_reviewers:
+#       - "@your-team/infra-team"
+#     wait_timer: 4320  # 3天等待期

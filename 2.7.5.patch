@@ -1,0 +1,167 @@
+diff --git a/.pre-commit-config.yaml b/.pre-commit-config.yaml
+index 16ced0cde..e037b7ad5 100644
+--- a/.pre-commit-config.yaml
++++ b/.pre-commit-config.yaml
+@@ -1,16 +1,162 @@
++# Pre-commit Configuration
++# 用法: pip install pre-commit && pre-commit install
++# 或: pip install pre-commit && pre-commit install-hooks
++
++# 默认的最低 Python 版本
++default_install_hook_types: [pre-commit, pre-push, commit-msg]
++default_stages: [pre-commit]
++
+ repos:
++  # 本地钩子
+   - repo: local
+     hooks:
++      # 翻译更新
+       - id: translations
+         name: translations
+         entry: make translations
+         language: system
+         files: '\.py$|\.html$|babel\.cfg$'
+         pass_filenames: false
++        stages: [pre-commit]
+ 
++      # 代码格式化
+       - id: reformat
+         name: reformat
+         entry: make reformat
+         language: system
+         files: '\.py$|\.html$'
+         pass_filenames: false
++        stages: [pre-commit]
++
++      # 静态测试
++      - id: static_tests
++        name: static_tests
++        entry: make static_tests
++        language: system
++        files: warehouse/static/.*\.(js|ts|jsx|tsx)$
++        pass_filenames: false
++        stages: [pre-commit]
++
++      # 静态代码检查
++      - id: static_lint
++        name: static_lint
++        entry: make static_lint
++        language: system
++        files: warehouse/static/.*\.(js|ts|jsx|tsx)$
++        pass_filenames: false
++        stages: [pre-commit]
++
++  # Python 代码格式化
++  - repo: https://github.com/psf/black
++    rev: 25.1.0
++    hooks:
++      - id: black
++        language_version: python3.14
++        args: ['--line-length=88']
++        files: '\.py$'
++        exclude: '^migrations/'
++
++  # Import 排序
++  - repo: https://github.com/pycqa/isort
++    rev: 5.13.2
++    hooks:
++      - id: isort
++        args: ['--profile', 'black', '--line-length=88']
++        files: '\.py$'
++        exclude: '^migrations/'
++
++  # Python Linter
++  - repo: https://github.com/pycqa/flake8
++    rev: 7.1.1
++    hooks:
++      - id: flake8
++        args: ['--max-line-length=88', '--extend-ignore=E203,W503']
++        files: '\.py$'
++        exclude: '^migrations/|^docs/'
++
++  # Python 类型检查
++  - repo: https://github.com/pre-commit/mirrors-mypy
++    rev: v1.14.2
++    hooks:
++      - id: mypy
++        additional_dependencies: [types-all]
++        args: ['--ignore-missing-imports', '--strict-optional']
++        files: '\.py$'
++        exclude: '^migrations/|^docs/'
++
++  # 安全检查
++  - repo: https://github.com/PyCQA/bandit
++    rev: 1.7.10
++    hooks:
++      - id: bandit
++        args: ['-r', 'warehouse/', '-f', 'txt']
++        files: '\.py$'
++        exclude: '^migrations/'
++
++  # YAML 格式检查
++  - repo: https://github.com/pre-commit/pre-commit-hooks
++    rev: v5.0.0
++    hooks:
++      - id: check-yaml
++        args: ['--allow-multiple-documents']
++        files: '\.(yaml|yml)$'
++      - id: check-json
++        files: '\.json$'
++      - id: check-toml
++        files: '\.toml$'
++      - id: check-merge-conflict
++      - id: check-added-large-files
++        args: ['--maxkb=5000']
++      - id: end-of-file-fixer
++      - id: trailing-whitespace
++        args: ['--markdown-line-length-extend=120']
++
++  # Dockerfile Lint
++  - repo: https://github.com/hadolint/hadolint
++    rev: v2.12.0
++    hooks:
++      - id: hadolint
++        args: ['--ignore=DL3008', '--ignore=DL3013']
++        files: Dockerfile
++
++  # Git 安全检查
++  - repo: https://github.com/pre-commit/pre-commit-hooks
++    rev: v5.0.0
++    hooks:
++      - id: detect-secrets
++        args: ['--baseline', '.secrets.baseline']
++        exclude: '(\.git|\.json)$'
++
++  # Shell 脚本检查
++  - repo: https://github.com/koalaman/shellcheck-precommit
++    rev: v0.9.0
++    hooks:
++      - id: shellcheck
++        args: ['--external-sources']
++
++  # Commit 消息格式
++  - repo: https://github.com/commitizen-tools/commitizen
++    rev: v3.3.3
++    hooks:
++      - id: commitizen
++        stages: [commit-msg]
++        args: ['--cz', 'cz_conventional_commits']
++
++# commit-msg 阶段钩子
++- repo: local
++  hooks:
++    - id: commit-msg-format
++      name: Commit message format
++      entry: bash -c 'if ! grep -qE "^(feat|fix|docs|style|refactor|test|chore|perf|ci|build|revert)(\(.+\))?: .{1,50}" "$1"; then echo "Invalid commit message format"; exit 1; fi'
++      language: system
++      stages: [commit-msg]
++
++# pre-push 阶段钩子 (在 git push 时运行)
++- repo: local
++  hooks:
++    - id: pre-push-tests
++      name: Pre-push tests
++      entry: make tests
++      language: system
++      pass_filenames: false
++      stages: [pre-push]

@@ -1,0 +1,165 @@
+# Kubernetes Deployment Configuration for CI/CD
+# 使用方法: kubectl apply -f k8s/warehouse-staging.yaml
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: warehouse-staging
+  namespace: warehouse-staging
+  labels:
+    app: warehouse
+    environment: staging
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: warehouse
+      environment: staging
+  template:
+    metadata:
+      labels:
+        app: warehouse
+        environment: staging
+      annotations:
+        # 用于 SBOM 追踪
+        sbom.spdx.io/reference: warehouse-staging-sbom.json
+    spec:
+      serviceAccountName: warehouse
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+        - name: warehouse
+          image: ghcr.io/pypi/warehouse:latest  # 由 CI 推送
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8000
+              name: http
+          env:
+            - name: ENVIRONMENT
+              value: "staging"
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: warehouse-secrets
+                  key: database-url
+            - name: REDIS_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: warehouse-config
+                  key: redis-url
+            - name: GIT_SHA
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.annotations['git.sha']
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "250m"
+            limits:
+              memory: "2Gi"
+              cpu: "1000m"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sh", "-c", "sleep 10"]
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app: warehouse
+                topologyKey: kubernetes.io/hostname
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: warehouse-staging
+  namespace: warehouse-staging
+spec:
+  selector:
+    app: warehouse
+    environment: staging
+  ports:
+    - port: 443
+      targetPort: 8000
+      name: https
+  type: ClusterIP
+
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: warehouse-staging
+  namespace: warehouse-staging
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+spec:
+  tls:
+    - hosts:
+        - staging.pypi.org
+      secretName: warehouse-staging-tls
+  rules:
+    - host: staging.pypi.org
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: warehouse-staging
+                port:
+                  number: 443
+
+---
+# Horizontal Pod Autoscaler
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: warehouse-staging
+  namespace: warehouse-staging
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: warehouse-staging
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
